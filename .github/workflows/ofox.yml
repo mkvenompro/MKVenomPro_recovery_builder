@@ -185,18 +185,33 @@ jobs:
           fi
 
       - name: Telegram — build started
-        if: env.TG_TOKEN != '' && env.TG_CHAT_ID != ''
+        if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set +e
-          curl -sS -X POST \
+
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notifications are disabled: TG_TOKEN or TG_CHAT_ID is missing."
+            exit 0
+          fi
+
+          TEXT="$(printf \
+            '🦊 <b>OrangeFox CI</b>\n\n🚀 <b>BUILD STARTED</b>\n\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔗 <a href=\"https://github.com/%s/actions/runs/%s\">View build logs</a>' \
+            "$FOX_BRANCH" "${TARGET}" "${{ inputs.DT_REPO_URL }}" "${{ inputs.DT_BRANCH }}" "${OF_MAINTAINER}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}")"
+
+          RESPONSE="$(curl -sS -X POST \
             "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
             --data-urlencode "parse_mode=HTML" \
-            --data-urlencode "text=$(printf \
-              '🦊 <b>OrangeFox CI</b>\n\n✔️ Build triggered!\n\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n👤 Maintainer: %s\n🌲 Logs: https://github.com/%s/actions/runs/%s' \
-              "$FOX_BRANCH" "${TARGET}" "${OF_MAINTAINER}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}")" \
-            >/dev/null
+            --data-urlencode "text=${TEXT}" 2>&1)"
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram: build-started message sent."
+          else
+            echo "::warning::Telegram build-started notification failed."
+            echo "$RESPONSE"
+          fi
 
       - name: Clone OrangeFox sync
         shell: bash
@@ -264,7 +279,8 @@ jobs:
             "$DT_URL" \
             device_tree_staging
 
-          cd device_tree_staging
+          STAGING_PATH="$SYNC_PATH/device_tree_staging"
+          cd "$STAGING_PATH"
 
           DEVICE_MAKEFILE=""
           DEVICE_DIRECTORY=""
@@ -313,10 +329,10 @@ jobs:
             exit 1
           fi
 
-          mkdir -p "$DEVICE_DIRECTORY"
+          mkdir -p "$SYNC_PATH/$DEVICE_DIRECTORY"
 
-          rm -rf "$DEVICE_DIRECTORY/$DEVICE_NAME"
-          mv device_tree_staging "$DEVICE_DIRECTORY/$DEVICE_NAME"
+          rm -rf "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+          mv "$STAGING_PATH" "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
 
           TREE_PATH="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
           COMMIT_ID="$(git -C "$TREE_PATH" rev-parse HEAD)"
@@ -702,24 +718,51 @@ jobs:
           fi
 
       - name: Telegram — build completed
-        if: always() && env.TG_TOKEN != '' && env.TG_CHAT_ID != ''
+        if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set +e
 
-          STATUS="❌ FAILED"
-          if [ "${{ job.status }}" = "success" ]; then
-            STATUS="✅ SUCCESS"
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram notifications are disabled: TG_TOKEN or TG_CHAT_ID is missing."
+            exit 0
           fi
 
-          curl -sS -X POST \
+          STATUS="❌ <b>BUILD FAILED</b>"
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS="✅ <b>BUILD SUCCESSFUL</b>"
+          fi
+
+          DEVICE="${DEVICE_NAME:-unknown}"
+          MD5="${MD5_IMG:-N/A}"
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_ID}"
+          LOG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          TEXT="$(printf \
+            '🦊 <b>OrangeFox CI</b>\n\n%s\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n🔢 MD5: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n📦 <a href=\"%s\">GitHub Release</a>\n🔗 <a href=\"%s\">Build Logs</a>' \
+            "$STATUS" "$DEVICE" "$FOX_BRANCH" "$TARGET" "$MD5" "$OF_MAINTAINER" "$RELEASE_URL" "$LOG_URL")"
+
+          if [ -n "${OSHI_LINK:-}" ]; then
+            TEXT="${TEXT}\n☁️ <a href=\"${OSHI_LINK}\">oshi.at</a>"
+          fi
+
+          if [ -n "${GOFILE_LINK:-}" ]; then
+            TEXT="${TEXT}\n☁️ <a href=\"${GOFILE_LINK}\">Gofile</a>"
+          fi
+
+          RESPONSE="$(curl -sS -X POST \
             "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}" \
             --data-urlencode "parse_mode=HTML" \
-            --data-urlencode "text=$(printf \
-              '🦊 <b>OrangeFox CI</b>\n\n%s\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n🔢 MD5: <code>%s</code>\n📦 Release: https://github.com/%s/releases/tag/build-%s' \
-              "$STATUS" "$DEVICE_NAME" "$FOX_BRANCH" "$TARGET" "${MD5_IMG:-N/A}" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")" \
-            >/dev/null
+            --data-urlencode "text=${TEXT}" 2>&1)"
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram: build-completed message sent."
+          else
+            echo "::warning::Telegram build-completed notification failed."
+            echo "$RESPONSE"
+          fi
 
       - name: ccache statistics
         if: always()
