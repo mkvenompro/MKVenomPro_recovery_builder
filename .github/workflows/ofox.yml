@@ -16,9 +16,8 @@ on:
         type: string
 
       OF_MAINTAINER:
-        description: "Maintainer name shown in build props / Telegram / release"
-        required: true
-        default: "${{ github.actor }}"
+        description: "Maintainer name shown in build props / Telegram / release (leave empty to use your GitHub username)"
+        required: false
         type: string
 
       FOX_BRANCH:
@@ -122,7 +121,7 @@ jobs:
       TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
       DEVICE:        ${{ github.event.inputs.DEVICE_NAME }}
       OEM:           ${{ github.event.inputs.OEM }}
-      OF_MAINTAINER: ${{ github.event.inputs.OF_MAINTAINER }}
+      OF_MAINTAINER: ${{ github.event.inputs.OF_MAINTAINER || github.actor }}
       TARGET:        ${{ github.event.inputs.BUILD_TARGET }}
 
     steps:
