@@ -1,77 +1,30 @@
-name: 🦊 OrangeFox · Generic Device
+name: 🦊 OrangeFox Builder
 
 on:
   workflow_dispatch:
     inputs:
 
-      DEVICE_NAME:
-        description: "Device codename (e.g. spinel)"
-        required: true
-        type: string
-
-      OEM:
-        description: "OEM / brand folder under device/ (e.g. xiaomi, samsung)"
-        required: true
-        default: "xiaomi"
-        type: string
-
-      OF_MAINTAINER:
-        description: "Maintainer name shown in build props / Telegram / release (leave empty to use your GitHub username)"
-        required: false
-        type: string
-
       FOX_BRANCH:
-        description: "OrangeFox branch"
+        description: "OrangeFox Manifest Branch"
         required: true
         type: choice
         options:
           - "12.1  — Android 12L · VAB + AIDL fscrypt"
           - "14.1  — Android 14 · GKI 2.0 / VAB  [EXPERIMENTAL]"
 
-      OF_MAINTAINER_PATCH_VERSION:
-        description: "Maintainer patch version (digits only, e.g. 1)"
-        required: false
-        default: "1"
-        type: string
-
-      USE_LATEST_MAGISK:
-        description: "Bundle latest Magisk zip?"
-        required: true
-        type: choice
-        options:
-          - "true"
-          - "false"
-
-      LDCHECK:
-        description: "Run LDCheck after build? (needs tools/ldcheck + tools/libneeds in builder branch)"
-        required: false
-        default: false
-        type: boolean
-
-      LDCHECKPATH:
-        description: "Blob path for LDCheck (e.g. system/bin/qseecomd)"
-        required: false
-        default: "system/bin/qseecomd"
-        type: string
-
-      EXTRA_CMD:
-        description: "Extra exports before lunch (optional)"
-        required: false
-        type: string
-
       DT_REPO_URL:
-        description: "Device tree repository URL (can be private — GT_TOKEN is used automatically)"
+        description: "Custom Recovery Tree (public or private — token applied automatically)"
         required: true
         type: string
 
       DT_BRANCH:
-        description: "Device tree branch"
+        description: "Custom Recovery Tree Branch"
         required: true
         default: "android-12.1"
         type: string
 
       BUILD_TARGET:
-        description: "mka target to build"
+        description: "Specify your Build Target"
         required: true
         type: choice
         default: "vendorbootimage"
@@ -80,35 +33,35 @@ on:
           - "recoveryimage"
           - "bootimage"
 
-      LUNCH_SUFFIX:
-        description: "Lunch target suffix override (e.g. ap2a-eng). Leave default unless the device needs a special lunch combo."
-        required: false
-        default: "eng"
-        type: string
+      USE_LATEST_MAGISK:
+        description: "Bundle latest Magisk zip?"
+        required: true
+        type: boolean
+        default: true
 
-      ENABLE_LIB_FIX:
-        description: "Run the DT_NEEDED shared-library patch + forced image rebuild step? (only needed for devices with a known missing-symbol crash, e.g. spinel/libpixelflinger)"
+      UPLOAD_RESULTS:
+        description: "Upload results to oshi.at / gofile.io?"
+        required: true
+        type: boolean
+        default: true
+
+      LDCHECK:
+        description: "Use LDCHECK"
         required: false
         default: false
         type: boolean
 
-      FIX_LIB_NAME:
-        description: "Shared library to patch/verify when ENABLE_LIB_FIX is on (e.g. libpixelflinger.so)"
+      LDCHECKPATH:
+        description: "Path of blobs to check"
         required: false
-        default: "libpixelflinger.so"
-        type: string
-
-      FIX_LIB_SYMBOL:
-        description: "Symbol to verify exists in FIX_LIB_NAME when ENABLE_LIB_FIX is on"
-        required: false
-        default: "res_get_pixel_formatv"
+        default: "system/bin/qseecomd"
         type: string
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
   build:
-    name: "🦊 ${{ github.event.inputs.DEVICE_NAME }} · fox_${{ github.event.inputs.FOX_BRANCH }}"
+    name: "🦊 fox_${{ github.event.inputs.FOX_BRANCH }}"
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     timeout-minutes: 720
@@ -119,9 +72,7 @@ jobs:
       GT_TOKEN:      ${{ secrets.GT_TOKEN }}
       TG_TOKEN:      ${{ secrets.TG_TOKEN }}
       TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
-      DEVICE:        ${{ github.event.inputs.DEVICE_NAME }}
-      OEM:           ${{ github.event.inputs.OEM }}
-      OF_MAINTAINER: ${{ github.event.inputs.OF_MAINTAINER || github.actor }}
+      OF_MAINTAINER: ${{ github.actor }}
       TARGET:        ${{ github.event.inputs.BUILD_TARGET }}
 
     steps:
@@ -134,7 +85,6 @@ jobs:
 
       - name: Display inputs
         run: |
-          echo "Device       : ${{ env.OEM }}/${{ env.DEVICE }}"
           echo "Branch       : ${{ github.event.inputs.FOX_BRANCH }}"
           echo "Target       : ${{ env.TARGET }}"
           echo "Device tree  : ${{ github.event.inputs.DT_REPO_URL }} @ ${{ github.event.inputs.DT_BRANCH }}"
@@ -178,10 +128,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/ccache
-          key: ccache-${{ env.DEVICE }}-${{ github.event.inputs.FOX_BRANCH }}-${{ github.sha }}
+          key: ccache-${{ github.event.inputs.DT_REPO_URL }}-${{ github.event.inputs.FOX_BRANCH }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ env.DEVICE }}-${{ github.event.inputs.FOX_BRANCH }}-
-            ccache-${{ env.DEVICE }}-
+            ccache-${{ github.event.inputs.DT_REPO_URL }}-${{ github.event.inputs.FOX_BRANCH }}-
+            ccache-${{ github.event.inputs.DT_REPO_URL }}-
 
       - name: Set ccache size
         run: ccache -M 50G
@@ -205,8 +155,8 @@ jobs:
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="HTML" \
             -d text="$(printf \
-              '🦊 <b>OrangeFox CI · %s</b>\n\n✔️ Build triggered!\n\n📱 Device: <code>%s</code> (%s)\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n👤 Maintainer: %s\n🌲 Logs: <a href=\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\">View</a>' \
-              "${{ env.DEVICE }}" "${{ env.DEVICE }}" "${{ env.OEM }}" "$FOX_BRANCH" "${{ env.TARGET }}" "${{ env.OF_MAINTAINER }}")"
+              '🦊 <b>OrangeFox CI</b>\n\n✔️ Build triggered!\n\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n👤 Maintainer: %s\n🌲 Logs: <a href=\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\">View</a>' \
+              "$FOX_BRANCH" "${{ env.TARGET }}" "${{ env.OF_MAINTAINER }}")"
 
       - name: Clone orangefox_sync
         run: |
@@ -266,8 +216,14 @@ jobs:
           done
           cd ..
 
-          DEVICE_DIRECTORY="${DEVICE_DIRECTORY:-device/${{ env.OEM }}}"
-          DEVICE_NAME="${DEVICE_NAME:-${{ env.DEVICE }}}"
+          # Fallback: derive brand/device from the repo URL itself
+          # (e.g. .../device_xiaomi_spinel or .../recovery_device_xiaomi_spinel)
+          REPO_BASENAME=$(basename "$DT_URL" .git)
+          FALLBACK_BRAND=$(echo "$REPO_BASENAME" | awk -F'_' '{print $(NF-1)}')
+          FALLBACK_DEVICE=$(echo "$REPO_BASENAME" | awk -F'_' '{print $NF}')
+
+          DEVICE_DIRECTORY="${DEVICE_DIRECTORY:-device/${FALLBACK_BRAND:-unknown}}"
+          DEVICE_NAME="${DEVICE_NAME:-${FALLBACK_DEVICE:-unknown}}"
 
           mkdir -p "$DEVICE_DIRECTORY"
           mv device_tree_staging "$DEVICE_DIRECTORY/$DEVICE_NAME"
@@ -280,6 +236,8 @@ jobs:
             echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE"
             echo "COMMIT_ID=$COMMIT_ID"
           } >> "$GITHUB_ENV"
+
+          echo "Detected device: $DEVICE_NAME (${DEVICE_DIRECTORY})"
 
       - name: Download latest Magisk
         if: github.event.inputs.USE_LATEST_MAGISK == 'true'
@@ -328,9 +286,6 @@ jobs:
           source build/envsetup.sh
           set -e
 
-          EXTRA="${{ github.event.inputs.EXTRA_CMD }}"
-          [ -n "$EXTRA" ] && eval "$EXTRA"
-
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
           export OF_MAINTAINER="${{ env.OF_MAINTAINER }}"
           export ALLOW_MISSING_DEPENDENCIES=true
@@ -341,8 +296,7 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_EXEC=$(which ccache)
 
-          PATCH_VER="${{ github.event.inputs.OF_MAINTAINER_PATCH_VERSION }}"
-          [ -n "$PATCH_VER" ] && export FOX_MAINTAINER_PATCH_VERSION="$PATCH_VER"
+          export FOX_MAINTAINER_PATCH_VERSION="1"
 
           [ -n "$FOX_USE_SPECIFIC_MAGISK_ZIP" ] && \
             export FOX_USE_SPECIFIC_MAGISK_ZIP="$FOX_USE_SPECIFIC_MAGISK_ZIP"
@@ -350,21 +304,40 @@ jobs:
           export FOX_AB_DEVICE=1
           export FOX_VIRTUAL_AB_DEVICE=1
 
-          SUFFIX="${{ github.event.inputs.LUNCH_SUFFIX }}"
-          LUNCH_TARGET="twrp_${DEVICE_NAME}-${SUFFIX}"
+          # Most devices lunch as twrp_<device>-eng. If a device needs a special
+          # combo (e.g. twrp_spinel-ap2a-eng), place a file named
+          # "lunch_target.txt" with the full target at the root of its device
+          # tree and it will be picked up automatically.
+          LUNCH_OVERRIDE="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME/lunch_target.txt"
+          if [ -f "$LUNCH_OVERRIDE" ]; then
+            LUNCH_TARGET=$(tr -d '[:space:]' < "$LUNCH_OVERRIDE")
+          else
+            LUNCH_TARGET="twrp_${DEVICE_NAME}-eng"
+          fi
 
           lunch "$LUNCH_TARGET"
           make clean
           mka adbd "${{ env.TARGET }}"
 
       - name: Fix shared library DT_NEEDED and rebuild target image
-        if: github.event.inputs.ENABLE_LIB_FIX == 'true'
         run: |
           set -e
+          FIX_CONF="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME/lib_fix.conf"
+
+          # This device tree doesn't need the fix — nothing to do.
+          if [ ! -f "$FIX_CONF" ]; then
+            exit 0
+          fi
+
+          # lib_fix.conf format:
+          #   LIB_NAME=libpixelflinger.so
+          #   SYMBOL=res_get_pixel_formatv
+          source "$FIX_CONF"
+          LIB="${LIB_NAME:?LIB_NAME missing in lib_fix.conf}"
+          SYMBOL="${SYMBOL:?SYMBOL missing in lib_fix.conf}"
+
           OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
           VBIMG="$OUT/vendor_boot.img"
-          LIB="${{ github.event.inputs.FIX_LIB_NAME }}"
-          SYMBOL="${{ github.event.inputs.FIX_LIB_SYMBOL }}"
 
           if [ ! -f "$VBIMG" ]; then
             echo "?? vendor_boot.img not found — nothing to fix"
@@ -519,7 +492,7 @@ jobs:
             | **MD5 (zip)** | `${{ env.MD5_ZIP }}` |
 
       - name: Mirror to oshi.at
-        if: env.CHECK_IMG_IS_OK == 'true'
+        if: env.CHECK_IMG_IS_OK == 'true' && github.event.inputs.UPLOAD_RESULTS == 'true'
         continue-on-error: true
         run: |
           OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
@@ -535,34 +508,52 @@ jobs:
           fi
 
       - name: Upload to Gofile.io
-        if: env.CHECK_IMG_IS_OK == 'true'
+        if: env.CHECK_IMG_IS_OK == 'true' && github.event.inputs.UPLOAD_RESULTS == 'true'
         continue-on-error: true
         run: |
           OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
           FILE="$OUT/vendor_boot.img"
           if [ ! -f "$FILE" ]; then exit 0; fi
 
-          SERVER_RESPONSE=$(curl -s https://api.gofile.io/servers)
-          SERVER=$(echo "$SERVER_RESPONSE" | jq -r '.data.servers[0].name // "store4"')
-          echo "Gofile server: $SERVER"
+          GOFILE_LINK=""
+          for attempt in 1 2 3; do
+            echo "=== Gofile upload attempt $attempt/3 ==="
 
-          GOFILE_RESPONSE=$(curl -s \
-            -F "file=@$FILE" \
-            "https://${SERVER}.gofile.io/uploadFile")
+            SERVER_RESPONSE=$(curl -s --max-time 30 https://api.gofile.io/servers)
+            SERVER=$(echo "$SERVER_RESPONSE" | jq -r '.data.servers[0].name // empty')
+            if [ -z "$SERVER" ]; then
+              echo "Could not get a Gofile server, retrying..."
+              sleep 5
+              continue
+            fi
+            echo "Gofile server: $SERVER"
 
-          GOFILE_LINK=$(echo "$GOFILE_RESPONSE" | jq -r '.data.downloadPage // empty')
+            GOFILE_RESPONSE=$(curl -s --max-time 600 \
+              -F "file=@$FILE" \
+              "https://${SERVER}.gofile.io/uploadFile")
+
+            GOFILE_LINK=$(echo "$GOFILE_RESPONSE" | jq -r '.data.downloadPage // empty')
+            if [ -n "$GOFILE_LINK" ]; then
+              echo "Gofile: $GOFILE_LINK"
+              break
+            fi
+
+            echo "Gofile upload failed on attempt $attempt"
+            echo "$GOFILE_RESPONSE" | head -c 300
+            echo
+            sleep 5
+          done
+
           if [ -n "$GOFILE_LINK" ]; then
             echo "GOFILE_LINK=$GOFILE_LINK" >> "$GITHUB_ENV"
-            echo "Gofile: $GOFILE_LINK"
           else
-            echo "Gofile upload failed"
-            echo "$GOFILE_RESPONSE" | head -c 300
+            echo "Gofile upload failed after 3 attempts — GitHub Release upload already succeeded, so nothing is lost."
           fi
 
       - name: Telegram — success
         if: success() && env.TG_TOKEN != '' && env.CHECK_IMG_IS_OK == 'true'
         run: |
-          TG_TEXT='🦊 <b>OrangeFox CI · %s</b>\n\n✅ Build complete!\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n📦 File: <code>%s</code>\n🔐 MD5: <code>%s</code>\n'
+          TG_TEXT='🦊 <b>OrangeFox CI</b>\n\n✅ Build complete!\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n📦 File: <code>%s</code>\n🔐 MD5: <code>%s</code>\n'
           if [ -n "$GOFILE_LINK" ]; then
             TG_TEXT="${TG_TEXT}⬇️ Gofile: <a href=\"%s\">Download</a>\n"
           fi
@@ -571,7 +562,7 @@ jobs:
           fi
           TG_TEXT="${TG_TEXT}🌲 Release: <a href=\"https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}\">GitHub</a>\n👤 By: ${{ env.OF_MAINTAINER }}"
 
-          ARGS="-d parse_mode=HTML -d text=\"$(printf "$TG_TEXT" "$DEVICE" "$DEVICE" "$FOX_BRANCH" "$TARGET" "$FILENAME" "$MD5_IMG")\""
+          ARGS="-d parse_mode=HTML -d text=\"$(printf "$TG_TEXT" "$DEVICE_NAME" "$FOX_BRANCH" "$TARGET" "$FILENAME" "$MD5_IMG")\""
           if [ -n "$GOFILE_LINK" ]; then
             ARGS="$ARGS -d gofile=\"$GOFILE_LINK\""
           fi
