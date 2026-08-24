@@ -1,0 +1,579 @@
+name: 🦊 OrangeFox · Generic Device
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      DEVICE_NAME:
+        description: "Device codename (e.g. spinel)"
+        required: true
+        type: string
+
+      OEM:
+        description: "OEM / brand folder under device/ (e.g. xiaomi, samsung)"
+        required: true
+        default: "xiaomi"
+        type: string
+
+      OF_MAINTAINER:
+        description: "Maintainer name shown in build props / Telegram / release"
+        required: true
+        default: "${{ github.actor }}"
+        type: string
+
+      FOX_BRANCH:
+        description: "OrangeFox branch"
+        required: true
+        type: choice
+        options:
+          - "12.1  — Android 12L · VAB + AIDL fscrypt"
+          - "14.1  — Android 14 · GKI 2.0 / VAB  [EXPERIMENTAL]"
+
+      OF_MAINTAINER_PATCH_VERSION:
+        description: "Maintainer patch version (digits only, e.g. 1)"
+        required: false
+        default: "1"
+        type: string
+
+      USE_LATEST_MAGISK:
+        description: "Bundle latest Magisk zip?"
+        required: true
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+      LDCHECK:
+        description: "Run LDCheck after build? (needs tools/ldcheck + tools/libneeds in builder branch)"
+        required: false
+        default: false
+        type: boolean
+
+      LDCHECKPATH:
+        description: "Blob path for LDCheck (e.g. system/bin/qseecomd)"
+        required: false
+        default: "system/bin/qseecomd"
+        type: string
+
+      EXTRA_CMD:
+        description: "Extra exports before lunch (optional)"
+        required: false
+        type: string
+
+      DT_REPO_URL:
+        description: "Device tree repository URL (can be private — GT_TOKEN is used automatically)"
+        required: true
+        type: string
+
+      DT_BRANCH:
+        description: "Device tree branch"
+        required: true
+        default: "android-12.1"
+        type: string
+
+      BUILD_TARGET:
+        description: "mka target to build"
+        required: true
+        type: choice
+        default: "vendorbootimage"
+        options:
+          - "vendorbootimage"
+          - "recoveryimage"
+          - "bootimage"
+
+      LUNCH_SUFFIX:
+        description: "Lunch target suffix override (e.g. ap2a-eng). Leave default unless the device needs a special lunch combo."
+        required: false
+        default: "eng"
+        type: string
+
+      ENABLE_LIB_FIX:
+        description: "Run the DT_NEEDED shared-library patch + forced image rebuild step? (only needed for devices with a known missing-symbol crash, e.g. spinel/libpixelflinger)"
+        required: false
+        default: false
+        type: boolean
+
+      FIX_LIB_NAME:
+        description: "Shared library to patch/verify when ENABLE_LIB_FIX is on (e.g. libpixelflinger.so)"
+        required: false
+        default: "libpixelflinger.so"
+        type: string
+
+      FIX_LIB_SYMBOL:
+        description: "Symbol to verify exists in FIX_LIB_NAME when ENABLE_LIB_FIX is on"
+        required: false
+        default: "res_get_pixel_formatv"
+        type: string
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build:
+    name: "🦊 ${{ github.event.inputs.DEVICE_NAME }} · fox_${{ github.event.inputs.FOX_BRANCH }}"
+    runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    timeout-minutes: 720
+    permissions:
+      contents: write
+
+    env:
+      GT_TOKEN:      ${{ secrets.GT_TOKEN }}
+      TG_TOKEN:      ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID:    ${{ secrets.TG_CHAT_ID }}
+      DEVICE:        ${{ github.event.inputs.DEVICE_NAME }}
+      OEM:           ${{ github.event.inputs.OEM }}
+      OF_MAINTAINER: ${{ github.event.inputs.OF_MAINTAINER }}
+      TARGET:        ${{ github.event.inputs.BUILD_TARGET }}
+
+    steps:
+
+      - name: Checkout builder branch
+        uses: actions/checkout@v4
+        with:
+          ref: Builder
+          path: ci
+
+      - name: Display inputs
+        run: |
+          echo "Device       : ${{ env.OEM }}/${{ env.DEVICE }}"
+          echo "Branch       : ${{ github.event.inputs.FOX_BRANCH }}"
+          echo "Target       : ${{ env.TARGET }}"
+          echo "Device tree  : ${{ github.event.inputs.DT_REPO_URL }} @ ${{ github.event.inputs.DT_BRANCH }}"
+          echo "Maintainer   : ${{ env.OF_MAINTAINER }}"
+          echo "LDCheck      : ${{ github.event.inputs.LDCHECK }}"
+
+      - name: Parse inputs
+        run: |
+          RAW_BRANCH="${{ github.event.inputs.FOX_BRANCH }}"
+          SYNC_BRANCH=$(echo "$RAW_BRANCH" | awk '{print $1}')
+          FOX_BRANCH="fox_${SYNC_BRANCH}"
+          BRANCH_INT=$(echo "$SYNC_BRANCH" | cut -d. -f1)
+          SYNC_PATH="${GITHUB_WORKSPACE}/OrangeFox/${FOX_BRANCH}"
+
+          {
+            echo "FOX_BRANCH=$FOX_BRANCH"
+            echo "SYNC_BRANCH=$SYNC_BRANCH"
+            echo "BRANCH_INT=$BRANCH_INT"
+            echo "SYNC_PATH=$SYNC_PATH"
+            echo "CCACHE_DIR=/tmp/ccache"
+            echo "CHECK_LEGACY_BRANCH=false"
+          } >> "$GITHUB_ENV"
+
+      - name: Clean up runner disk space
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: Add swap space (12 GB)
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 12
+
+      - name: Install build environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y aria2
+          git clone https://gitlab.com/OrangeFox/misc/scripts "$HOME/ofox-scripts"
+          cd "$HOME/ofox-scripts"
+          sudo bash setup/android_build_env.sh
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-${{ env.DEVICE }}-${{ github.event.inputs.FOX_BRANCH }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ env.DEVICE }}-${{ github.event.inputs.FOX_BRANCH }}-
+            ccache-${{ env.DEVICE }}-
+
+      - name: Set ccache size
+        run: ccache -M 50G
+
+      - name: Configure git
+        run: |
+          git config --global user.name  "${{ github.actor }}"
+          git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git config --global color.ui   false
+
+          # Use GT_TOKEN (from secrets) for every github.com clone in this job,
+          # so private repos (e.g. a private device tree) work with no extra logic.
+          if [ -n "$GT_TOKEN" ]; then
+            git config --global url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Telegram — build started
+        if: env.TG_TOKEN != ''
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT_ID}" \
+            -d parse_mode="HTML" \
+            -d text="$(printf \
+              '🦊 <b>OrangeFox CI · %s</b>\n\n✔️ Build triggered!\n\n📱 Device: <code>%s</code> (%s)\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n👤 Maintainer: %s\n🌲 Logs: <a href=\"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\">View</a>' \
+              "${{ env.DEVICE }}" "${{ env.DEVICE }}" "${{ env.OEM }}" "$FOX_BRANCH" "${{ env.TARGET }}" "${{ env.OF_MAINTAINER }}")"
+
+      - name: Clone orangefox_sync
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/OrangeFox"
+          cd "${GITHUB_WORKSPACE}/OrangeFox"
+          git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
+
+      - name: Sync OrangeFox sources (orangefox_sync.sh)
+        run: |
+          cd "${GITHUB_WORKSPACE}/OrangeFox/sync"
+          ./orangefox_sync.sh \
+            --branch "$SYNC_BRANCH" \
+            --path   "$SYNC_PATH"
+
+      - name: Ensure Guava dependency (14.1 only)
+        if: env.SYNC_BRANCH == '14.1'
+        run: |
+          cd "$SYNC_PATH"
+          if [ -f external/guava/Android.bp ] && \
+             grep -q 'name:[[:space:]]*"guava"' external/guava/Android.bp; then
+            echo "guava module already available."
+          else
+            echo "guava missing — cloning fallback..."
+            rm -rf external/guava
+            git clone --depth=1 \
+              https://android.googlesource.com/platform/external/guava \
+              external/guava
+          fi
+
+      - name: Clone device tree
+        run: |
+          set -e
+          cd "$SYNC_PATH"
+
+          DT_URL="${{ github.event.inputs.DT_REPO_URL }}"
+          DT_BRANCH="${{ github.event.inputs.DT_BRANCH }}"
+
+          # GT_TOKEN is applied automatically via the global git url.insteadOf
+          # config set in "Configure git", so this works for public and
+          # private github.com device tree repos alike.
+          git clone --depth=1 "$DT_URL" -b "$DT_BRANCH" ./device_tree_staging
+
+          cd device_tree_staging
+          DEVICE_MAKEFILE=""
+          DEVICE_DIRECTORY=""
+          DEVICE_NAME=""
+          for file in *.mk; do
+            makefile=$(sed -n 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+            brand=$(sed -n    's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+            codename=$(sed -n 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=\s*\(.*\)/\1/p' "$file")
+            if [[ -n "$makefile" && -n "$brand" && -n "$codename" ]]; then
+              DEVICE_MAKEFILE="$makefile"
+              DEVICE_DIRECTORY="device/$brand"
+              DEVICE_NAME="$codename"
+              break
+            fi
+          done
+          cd ..
+
+          DEVICE_DIRECTORY="${DEVICE_DIRECTORY:-device/${{ env.OEM }}}"
+          DEVICE_NAME="${DEVICE_NAME:-${{ env.DEVICE }}}"
+
+          mkdir -p "$DEVICE_DIRECTORY"
+          mv device_tree_staging "$DEVICE_DIRECTORY/$DEVICE_NAME"
+
+          COMMIT_ID=$(git -C "$DEVICE_DIRECTORY/$DEVICE_NAME" rev-parse HEAD)
+          sed -i '/BOARD_RAMDISK_USE_LZ4/d' "$DEVICE_DIRECTORY/$DEVICE_NAME/BoardConfig.mk"
+          {
+            echo "DEVICE_NAME=$DEVICE_NAME"
+            echo "DEVICE_DIRECTORY=$DEVICE_DIRECTORY"
+            echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE"
+            echo "COMMIT_ID=$COMMIT_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Download latest Magisk
+        if: github.event.inputs.USE_LATEST_MAGISK == 'true'
+        run: |
+          set -e
+          mkdir -p ~/Magisk && cd ~/Magisk
+
+          RESPONSE=$(curl -sL \
+            -H "Authorization: Bearer ${GT_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/topjohnwu/Magisk/releases/latest)
+
+          if ! echo "$RESPONSE" | jq -e '.assets' >/dev/null 2>&1; then
+            echo "? GitHub API did not return a valid release object."
+            echo "---- Response (truncated) ----"
+            echo "$RESPONSE" | head -c 500
+            echo
+            exit 1
+          fi
+
+          URL=$(echo "$RESPONSE" \
+            | jq -r '[.assets[] | select(.name | test("^Magisk-.*\\.apk$")) | .browser_download_url][0]')
+
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "? Could not find a Magisk-*.apk asset in the latest release."
+            echo "Available assets:"
+            echo "$RESPONSE" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          echo "Downloading Magisk: $URL"
+          aria2c -x4 "$URL" || wget "$URL"
+
+          APK=$(ls Magisk*.apk 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "? Download appears to have failed, no Magisk*.apk present."
+            exit 1
+          fi
+          mv "$APK" "${APK%.apk}.zip"
+          echo "FOX_USE_SPECIFIC_MAGISK_ZIP=$(ls ~/Magisk/Magisk*.zip | head -1)" >> "$GITHUB_ENV"
+
+      - name: Build OrangeFox
+        run: |
+          set +e
+          cd "$SYNC_PATH"
+          source build/envsetup.sh
+          set -e
+
+          EXTRA="${{ github.event.inputs.EXTRA_CMD }}"
+          [ -n "$EXTRA" ] && eval "$EXTRA"
+
+          export FOX_BUILD_DEVICE="$DEVICE_NAME"
+          export OF_MAINTAINER="${{ env.OF_MAINTAINER }}"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+          export FOX_BUILD_TYPE="Unofficial-CI"
+          export LC_ALL="C"
+
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(which ccache)
+
+          PATCH_VER="${{ github.event.inputs.OF_MAINTAINER_PATCH_VERSION }}"
+          [ -n "$PATCH_VER" ] && export FOX_MAINTAINER_PATCH_VERSION="$PATCH_VER"
+
+          [ -n "$FOX_USE_SPECIFIC_MAGISK_ZIP" ] && \
+            export FOX_USE_SPECIFIC_MAGISK_ZIP="$FOX_USE_SPECIFIC_MAGISK_ZIP"
+
+          export FOX_AB_DEVICE=1
+          export FOX_VIRTUAL_AB_DEVICE=1
+
+          SUFFIX="${{ github.event.inputs.LUNCH_SUFFIX }}"
+          LUNCH_TARGET="twrp_${DEVICE_NAME}-${SUFFIX}"
+
+          lunch "$LUNCH_TARGET"
+          make clean
+          mka adbd "${{ env.TARGET }}"
+
+      - name: Fix shared library DT_NEEDED and rebuild target image
+        if: github.event.inputs.ENABLE_LIB_FIX == 'true'
+        run: |
+          set -e
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
+          VBIMG="$OUT/vendor_boot.img"
+          LIB="${{ github.event.inputs.FIX_LIB_NAME }}"
+          SYMBOL="${{ github.event.inputs.FIX_LIB_SYMBOL }}"
+
+          if [ ! -f "$VBIMG" ]; then
+            echo "?? vendor_boot.img not found — nothing to fix"
+            exit 0
+          fi
+
+          echo "=== Installing patchelf ==="
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+
+          # ── 1. Find built library or use device tree's prebuilt stub ──
+          echo "=== Locating $LIB ==="
+          SRC=""
+          for path in \
+            "$OUT/obj/SHARED_LIBRARIES/${LIB%.so}_intermediates/$LIB" \
+            "$OUT/system/lib64/$LIB" \
+            $(find "$OUT/obj" -path "*/${LIB%.so}*" -name "$LIB" 2>/dev/null | head -3); do
+            if [ -f "$path" ]; then
+              SRC="$path"
+              break
+            fi
+          done
+
+          mkdir -p "$OUT/recovery/root/vendor/lib64"
+
+          if [ -n "$SRC" ]; then
+            echo "Found built library: $SRC ($(stat -c%s "$SRC") bytes)"
+            if ! nm -D "$SRC" | grep -q "$SYMBOL"; then
+              echo "! Built library missing $SYMBOL — using prebuilt stub"
+              SRC=""
+            else
+              echo "? Symbol $SYMBOL CONFIRMED in built library"
+            fi
+          fi
+
+          if [ -z "$SRC" ]; then
+            echo "Using prebuilt stub from device tree"
+            DT_LIB="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME/recovery/root/vendor/lib64/$LIB"
+            if [ -f "$DT_LIB" ]; then
+              echo "Prebuilt at $DT_LIB ($(stat -c%s "$DT_LIB") bytes)"
+              nm -D "$DT_LIB" | grep "$SYMBOL" && echo "? Symbol confirmed"
+              cp -v "$DT_LIB" "$OUT/recovery/root/vendor/lib64/$LIB"
+            else
+              echo "!! Prebuilt not found!"
+              find "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME" -name "$LIB" 2>/dev/null
+            fi
+          fi
+
+          # ── 2. Add DT_NEEDED to recovery binary ──
+          RECOVERY_BIN="$OUT/recovery/root/system/bin/recovery"
+          if [ -f "$RECOVERY_BIN" ]; then
+            echo "=== Adding DT_NEEDED $LIB to recovery binary ==="
+            if ! patchelf --print-needed "$RECOVERY_BIN" 2>/dev/null | grep -q "$LIB"; then
+              patchelf --add-needed "$LIB" "$RECOVERY_BIN"
+              echo "? Added $LIB to DT_NEEDED"
+            else
+              echo "? $LIB already in DT_NEEDED"
+            fi
+            echo "Recovery DT_NEEDED:"
+            patchelf --print-needed "$RECOVERY_BIN" | grep -i "${LIB%.so}"
+          else
+            echo "?? Recovery binary not found at $RECOVERY_BIN"
+          fi
+
+          # ── 3. Force rebuild target image ──
+          echo "=== Forcing ${{ env.TARGET }} rebuild ==="
+          rm -f "$VBIMG"
+          rm -f "$OUT/ramdisk-recovery.cpio" "$OUT/ramdisk-recovery.img" "$OUT/ramdisk-recovery.cpio.gz" "$OUT/ramdisk-recovery.cpio.lz4" "$OUT/ramdisk-recovery.cpio.lzma" 2>/dev/null || true
+          rm -rf "$OUT/obj/PACKAGING/ramdisk_recovery_intermediates" 2>/dev/null || true
+          touch "$OUT/recovery/root/init"
+
+          cd "$SYNC_PATH"
+          mka "${{ env.TARGET }}" 2>&1
+
+          # ── 4. Verify final image ──
+          if [ -f "$VBIMG" ]; then
+            echo "=== vendor_boot.img rebuilt: $(stat -c%s "$VBIMG") bytes ==="
+          else
+            echo "?? vendor_boot.img was NOT rebuilt!"
+            exit 1
+          fi
+
+          # ── 5. Verify library in ramdisk ──
+          echo "=== Verifying library in ramdisk ==="
+          RAMDISK_CPIO=$(ls "$OUT"/ramdisk-recovery.* 2>/dev/null | head -1)
+          if [ -n "$RAMDISK_CPIO" ]; then
+            echo "Ramdisk: $RAMDISK_CPIO"
+            found=false
+            if [[ "$RAMDISK_CPIO" == *.gz ]]; then
+              zcat "$RAMDISK_CPIO" | cpio -t 2>/dev/null | grep "$LIB" && found=true
+            elif [[ "$RAMDISK_CPIO" == *.lz4 ]]; then
+              lz4 -d "$RAMDISK_CPIO" stdout 2>/dev/null | cpio -t 2>/dev/null | grep "$LIB" && found=true
+            else
+              cat "$RAMDISK_CPIO" | cpio -t 2>/dev/null | grep "$LIB" && found=true
+            fi
+            if [ "$found" = true ]; then
+              echo "? $LIB CONFIRMED in ramdisk"
+            else
+              echo "?? $LIB NOT found in ramdisk!"
+              exit 1
+            fi
+          fi
+
+          echo "=== Done ==="
+
+      - name: Set build date
+        run: echo "BUILD_DATE=$(date +%Y%m%d)" >> "$GITHUB_ENV"
+
+      - name: Check build outputs
+        run: |
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
+          echo "OUT_DIR=$OUT" >> "$GITHUB_ENV"
+          if [ -f "$OUT"/vendor_boot.img ]; then
+            echo "CHECK_IMG_IS_OK=true" >> "$GITHUB_ENV"
+            MD5=$(md5sum "$OUT"/vendor_boot.img | cut -d ' ' -f1)
+            echo "MD5_IMG=$MD5" >> "$GITHUB_ENV"
+            cp "$OUT"/vendor_boot.img "$OUT"/OrangeFox-${DEVICE_NAME}-vendor_boot.img
+            echo "FILENAME=OrangeFox-${DEVICE_NAME}-vendor_boot.img" >> "$GITHUB_ENV"
+          else
+            echo "No vendor_boot.img found in $OUT"
+          fi
+          if [ -f "$OUT"/OrangeFox*.zip ]; then
+            echo "CHECK_ZIP_IS_OK=true" >> "$GITHUB_ENV"
+            echo "MD5_ZIP=$(md5sum "$OUT"/OrangeFox*.zip | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+          else
+            echo "No .zip found in $OUT"
+          fi
+
+      - name: Upload to GitHub Release
+        if: env.CHECK_IMG_IS_OK == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE_NAME }}/vendor_boot.img
+            ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox-${{ env.DEVICE_NAME }}-vendor_boot.img
+            ${{ env.SYNC_PATH }}/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
+          name: "OrangeFox for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}"
+          tag_name: ${{ github.run_id }}
+          token: ${{ secrets.GT_TOKEN }}
+          body: |
+            ## 🦊 OrangeFox Recovery — ${{ env.DEVICE_NAME }}
+
+            | | |
+            |---|---|
+            | **Branch** | `${{ env.FOX_BRANCH }}` |
+            | **Target** | `${{ env.TARGET }}` |
+            | **Device tree** | [${{ github.event.inputs.DT_REPO_URL }}](${{ github.event.inputs.DT_REPO_URL }}) @ `${{ github.event.inputs.DT_BRANCH }}` |
+            | **Tree commit** | [`${{ env.COMMIT_ID }}`](${{ github.event.inputs.DT_REPO_URL }}/commit/${{ env.COMMIT_ID }}) |
+            | **Maintainer** | ${{ env.OF_MAINTAINER }} |
+            | **Build date** | `${{ env.BUILD_DATE }}` |
+            | **MD5 (img)** | `${{ env.MD5_IMG }}` |
+            | **MD5 (zip)** | `${{ env.MD5_ZIP }}` |
+
+      - name: Mirror to oshi.at
+        if: env.CHECK_IMG_IS_OK == 'true'
+        continue-on-error: true
+        run: |
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
+          FILE="$OUT/vendor_boot.img"
+          if [ ! -f "$FILE" ]; then exit 0; fi
+          RESULT=$(curl -skT "$FILE" "https://oshi.at/OrangeFox-${DEVICE_NAME}-vendor_boot.img/20160" 2>/dev/null || curl -sT "$FILE" "http://oshi.at/OrangeFox-${DEVICE_NAME}-vendor_boot.img/20160" 2>/dev/null)
+          MIRROR_LINK=$(echo "$RESULT" | grep -i "DL:" | awk '{print $2}')
+          if [ -n "$MIRROR_LINK" ]; then
+            echo "MIRROR_LINK=$MIRROR_LINK" >> "$GITHUB_ENV"
+            echo "Mirror: $MIRROR_LINK"
+          else
+            echo "oshi.at upload failed or returned no DL link"
+          fi
+
+      - name: Upload to Gofile.io
+        if: env.CHECK_IMG_IS_OK == 'true'
+        continue-on-error: true
+        run: |
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
+          FILE="$OUT/vendor_boot.img"
+          if [ ! -f "$FILE" ]; then exit 0; fi
+
+          SERVER_RESPONSE=$(curl -s https://api.gofile.io/servers)
+          SERVER=$(echo "$SERVER_RESPONSE" | jq -r '.data.servers[0].name // "store4"')
+          echo "Gofile server: $SERVER"
+
+          GOFILE_RESPONSE=$(curl -s \
+            -F "file=@$FILE" \
+            "https://${SERVER}.gofile.io/uploadFile")
+
+          GOFILE_LINK=$(echo "$GOFILE_RESPONSE" | jq -r '.data.downloadPage // empty')
+          if [ -n "$GOFILE_LINK" ]; then
+            echo "GOFILE_LINK=$GOFILE_LINK" >> "$GITHUB_ENV"
+            echo "Gofile: $GOFILE_LINK"
+          else
+            echo "Gofile upload failed"
+            echo "$GOFILE_RESPONSE" | head -c 300
+          fi
+
+      - name: Telegram — success
+        if: success() && env.TG_TOKEN != '' && env.CHECK_IMG_IS_OK == 'true'
+        run: |
+          TG_TEXT='🦊 <b>OrangeFox CI · %s</b>\n\n✅ Build complete!\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n📦 File: <code>%s</code>\n🔐 MD5: <code>%s</code>\n'
+          if [ -n "$GOFILE_LINK" ]; then
+            TG_TEXT="${TG_TEXT}⬇️ Gofile: <a href=\"%s\">Download</a>\n"
+          fi
+          if [ -n "$MIRROR_LINK" ]; then
+            TG_TEXT="${TG_TEXT}⬇️ Mirror: <a href=\"%s\">oshi.at</a>\n"
+          fi
+          TG_TEXT="${TG_TEXT}🌲 Release: <a href=\"https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}\">GitHub</a>\n👤 By: ${{ env.OF_MAINTAINER }}"
+
+          ARGS="-d parse_mode=HTML -d text=\"$(printf "$TG_TEXT" "$DEVICE" "$DEVICE" "$FOX_BRANCH" "$TARGET" "$FILENAME" "$MD5_IMG")\""
+          if [ -n "$GOFILE_LINK" ]; then
+            ARGS="$ARGS -d gofile=\"$GOFILE_LINK\""
+          fi
+          eval curl -s -X POST "\"https://api.telegram.org/bot${TG_TOKEN}/sendMessage\"" -d chat_id="\"${TG_CHAT_ID}\"" $ARGS
