@@ -9,9 +9,15 @@ on:
         required: true
         type: choice
         options:
-          - "12.1  — Android 12L · VAB + AIDL fscrypt"
-          - "14.1  — Android 14 · GKI 2.0 / VAB  [EXPERIMENTAL]"
-          - "16.0  — Android 16 · GKI 2.0 / VAB  [EXPERIMENTAL]"
+          - "16.0"
+          - "14.1"
+          - "12.1"
+          - "11.0"
+          - "10.0"
+          - "9.0"
+          - "8.1"
+          - "7.1"
+          - "6.0"
 
       DT_REPO_URL:
         description: "Custom Recovery Tree (public or private — token applied automatically)"
@@ -514,57 +520,4 @@ jobs:
         run: |
           OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}"
           FILE="$OUT/vendor_boot.img"
-          if [ ! -f "$FILE" ]; then exit 0; fi
-
-          GOFILE_LINK=""
-          for attempt in 1 2 3; do
-            echo "=== Gofile upload attempt $attempt/3 ==="
-
-            SERVER_RESPONSE=$(curl -s --max-time 30 https://api.gofile.io/servers)
-            SERVER=$(echo "$SERVER_RESPONSE" | jq -r '.data.servers[0].name // empty')
-            if [ -z "$SERVER" ]; then
-              echo "Could not get a Gofile server, retrying..."
-              sleep 5
-              continue
-            fi
-            echo "Gofile server: $SERVER"
-
-            GOFILE_RESPONSE=$(curl -s --max-time 600 \
-              -F "file=@$FILE" \
-              "https://${SERVER}.gofile.io/uploadFile")
-
-            GOFILE_LINK=$(echo "$GOFILE_RESPONSE" | jq -r '.data.downloadPage // empty')
-            if [ -n "$GOFILE_LINK" ]; then
-              echo "Gofile: $GOFILE_LINK"
-              break
-            fi
-
-            echo "Gofile upload failed on attempt $attempt"
-            echo "$GOFILE_RESPONSE" | head -c 300
-            echo
-            sleep 5
-          done
-
-          if [ -n "$GOFILE_LINK" ]; then
-            echo "GOFILE_LINK=$GOFILE_LINK" >> "$GITHUB_ENV"
-          else
-            echo "Gofile upload failed after 3 attempts — GitHub Release upload already succeeded, so nothing is lost."
-          fi
-
-      - name: Telegram — success
-        if: success() && env.TG_TOKEN != '' && env.CHECK_IMG_IS_OK == 'true'
-        run: |
-          TG_TEXT='🦊 <b>OrangeFox CI</b>\n\n✅ Build complete!\n\n📱 Device: <code>%s</code>\n🌿 Branch: <code>%s</code>\n🎯 Target: <code>%s</code>\n📦 File: <code>%s</code>\n🔐 MD5: <code>%s</code>\n'
-          if [ -n "$GOFILE_LINK" ]; then
-            TG_TEXT="${TG_TEXT}⬇️ Gofile: <a href=\"%s\">Download</a>\n"
-          fi
-          if [ -n "$MIRROR_LINK" ]; then
-            TG_TEXT="${TG_TEXT}⬇️ Mirror: <a href=\"%s\">oshi.at</a>\n"
-          fi
-          TG_TEXT="${TG_TEXT}🌲 Release: <a href=\"https://github.com/${{ github.repository }}/releases/tag/${{ github.run_id }}\">GitHub</a>\n👤 By: ${{ env.OF_MAINTAINER }}"
-
-          ARGS="-d parse_mode=HTML -d text=\"$(printf "$TG_TEXT" "$DEVICE_NAME" "$FOX_BRANCH" "$TARGET" "$FILENAME" "$MD5_IMG")\""
-          if [ -n "$GOFILE_LINK" ]; then
-            ARGS="$ARGS -d gofile=\"$GOFILE_LINK\""
-          fi
-          eval curl -s -X POST "\"https://api.telegram.org/bot${TG_TOKEN}/sendMessage\"" -d chat_id="\"${TG_CHAT_ID}\"" $ARGS
+          if [ ! -f "$FILE
