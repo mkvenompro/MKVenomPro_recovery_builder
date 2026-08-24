@@ -11,6 +11,7 @@ on:
         options:
           - "12.1  — Android 12L · VAB + AIDL fscrypt"
           - "14.1  — Android 14 · GKI 2.0 / VAB  [EXPERIMENTAL]"
+          - "16.0  — Android 16 · GKI 2.0 / VAB  [EXPERIMENTAL]"
 
       DT_REPO_URL:
         description: "Custom Recovery Tree (public or private — token applied automatically)"
@@ -171,8 +172,8 @@ jobs:
             --branch "$SYNC_BRANCH" \
             --path   "$SYNC_PATH"
 
-      - name: Ensure Guava dependency (14.1 only)
-        if: env.SYNC_BRANCH == '14.1'
+      - name: Ensure Guava dependency (14.1 / 16.0)
+        if: env.SYNC_BRANCH == '14.1' || env.SYNC_BRANCH == '16.0'
         run: |
           cd "$SYNC_PATH"
           if [ -f external/guava/Android.bp ] && \
