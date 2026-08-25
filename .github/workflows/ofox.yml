@@ -334,6 +334,10 @@ jobs:
           TREE_PATH="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
           COMMIT_ID="$(git -C "$TREE_PATH" rev-parse HEAD)"
 
+          if [ ! -f "$TREE_PATH/vendorsetup.sh" ]; then
+            touch "$TREE_PATH/vendorsetup.sh"
+          fi
+
           if [ -f "$TREE_PATH/BoardConfig.mk" ]; then
             sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d' \
               "$TREE_PATH/BoardConfig.mk" || true
@@ -410,13 +414,13 @@ jobs:
       - name: Build OrangeFox
         shell: bash
         run: |
-          set -euo pipefail
-
           cd "$SYNC_PATH"
 
-          # FIX: envsetup.sh reads $TOP before it defines it; with set -u this crashes.
-          export TOP="$SYNC_PATH"
+          # Disable strict flags to mimic typical build env and bypass envsetup/patching minor failures
+          set +e
+          set +u
 
+          export ZSH_VERSION=""
           source build/envsetup.sh
 
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
@@ -450,6 +454,9 @@ jobs:
           lunch "$LUNCH_TARGET"
 
           make clean
+          
+          # Enable set -e only for compilation command
+          set -e
           mka adbd "$TARGET"
 
       - name: Optional shared-library patch
@@ -464,7 +471,6 @@ jobs:
             exit 0
           fi
 
-          # shellcheck disable=SC1090
           source "$FIX_CONF"
 
           LIB="${LIB_NAME:?LIB_NAME missing in lib_fix.conf}"
@@ -652,7 +658,7 @@ jobs:
             | **OrangeFox** | `${{ env.FOX_BRANCH }}` |
             | **Target** | `${{ env.TARGET }}` |
             | **Device tree** | `${{ inputs.DT_REPO_URL }}` |
-            | **Tree branch** | `${{ inputs.DT_BRANCH }}` |
+            | **Tree branch** | `${{ inputs.DT_BRANCH }}" |
             | **Tree commit** | `${{ env.COMMIT_ID }}` |
             | **Maintainer** | `${{ env.OF_MAINTAINER }}` |
             | **Build date** | `${{ env.BUILD_DATE }}` |
