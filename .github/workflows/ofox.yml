@@ -79,9 +79,6 @@ jobs:
       TARGET: ${{ inputs.BUILD_TARGET }}
 
     steps:
-      # No checkout is required.
-      # The previous workflow forced `ref: Builder`, which caused actions/checkout
-      # to fail before the actual build whenever that branch did not exist.
       - name: Display inputs
         shell: bash
         run: |
@@ -337,7 +334,6 @@ jobs:
           TREE_PATH="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
           COMMIT_ID="$(git -C "$TREE_PATH" rev-parse HEAD)"
 
-          # This old board flag can break newer OrangeFox ramdisk generation.
           if [ -f "$TREE_PATH/BoardConfig.mk" ]; then
             sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d' \
               "$TREE_PATH/BoardConfig.mk" || true
@@ -406,8 +402,6 @@ jobs:
           echo "LDCHECK enabled."
           echo "Requested path: ${{ inputs.LDCHECKPATH }}"
 
-          # Keep this as an environment variable so the device tree/build
-          # can consume it without hardcoding a specific device.
           {
             echo "LDCHECK_ENABLED=true"
             echo "LDCHECK_PATH=${{ inputs.LDCHECKPATH }}"
@@ -419,6 +413,9 @@ jobs:
           set -euo pipefail
 
           cd "$SYNC_PATH"
+
+          # FIX: envsetup.sh reads $TOP before it defines it; with set -u this crashes.
+          export TOP="$SYNC_PATH"
 
           source build/envsetup.sh
 
