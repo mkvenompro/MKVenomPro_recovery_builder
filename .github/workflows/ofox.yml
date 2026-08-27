@@ -176,10 +176,7 @@ jobs:
           STAGE="${1:-Unknown}"
           STATUS="${2:-success}"
           NOW="$(date +%s)"
-          START="$(
-            cat "$STATE_DIR/current_stage_start" 2>/dev/null ||
-            echo "$NOW"
-          )"
+          START="$(cat "$STATE_DIR/current_stage_start" 2>/dev/null || echo "$NOW")"
           ELAPSED=$((NOW - START))
           echo "${STAGE}|${STATUS}|${ELAPSED}" >> "$STATE_DIR/completed_stages"
           if [ "$STATUS" = "success" ]; then
@@ -188,22 +185,17 @@ jobs:
           else
             echo "🔴 STAGE FAILED: $STAGE"
             echo "⏱️ Duration: ${ELAPSED}s"
+            echo "$STAGE" > "$STATE_DIR/failed_stage"
           fi
           STAGEEND
 
           cat > "$STATE_DIR/tg_escape.sh" <<'TGESCAPE'
           #!/usr/bin/env bash
           printf '%s' "${1:-}" |
-            sed \
-              -e 's/&/\&amp;/g' \
-              -e 's/</\&lt;/g' \
-              -e 's/>/\&gt;/g'
+            sed               -e 's/&/\&amp;/g'               -e 's/</\&lt;/g'               -e 's/>/\&gt;/g'
           TGESCAPE
 
-          chmod +x \
-            "$STATE_DIR/stage_start.sh" \
-            "$STATE_DIR/stage_end.sh" \
-            "$STATE_DIR/tg_escape.sh"
+          chmod +x             "$STATE_DIR/stage_start.sh"             "$STATE_DIR/stage_end.sh"             "$STATE_DIR/tg_escape.sh"
 
           test -x "$STATE_DIR/stage_start.sh"
           test -x "$STATE_DIR/stage_end.sh"
@@ -340,35 +332,16 @@ jobs:
           }
 
           TEXT="$(
-            printf \
-              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
-              "$(escape_html "$FOX_BRANCH")" \
-              "$(escape_html "$TARGET")" \
-              "$(escape_html "${{ inputs.DT_REPO_URL }}")" \
-              "$(escape_html "${{ inputs.DT_BRANCH }}")" \
-              "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
-              "$(escape_html "$REPO_SYNC_JOBS")" \
-              "$(escape_html "$OF_MAINTAINER")" \
-              "$GITHUB_REPOSITORY" \
-              "$GITHUB_RUN_ID"
+            printf               '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>'               "$(escape_html "$FOX_BRANCH")"               "$(escape_html "$TARGET")"               "$(escape_html "${{ inputs.DT_REPO_URL }}")"               "$(escape_html "${{ inputs.DT_BRANCH }}")"               "$(escape_html "${{ inputs.RUNNER_TYPE }}")"               "$(escape_html "$REPO_SYNC_JOBS")"               "$(escape_html "$OF_MAINTAINER")"               "$GITHUB_REPOSITORY"               "$GITHUB_RUN_ID"
           )"
 
           RESPONSE="$(
-            curl -sS \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -X POST \
-              "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-              -d "chat_id=${TG_CHAT_ID}" \
-              --data-urlencode "parse_mode=HTML" \
-              --data-urlencode "text=${TEXT}" \
-              2>&1
+            curl -sS               --connect-timeout 10               --max-time 30               -X POST               "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"               -d "chat_id=${TG_CHAT_ID}"               --data-urlencode "parse_mode=HTML"               --data-urlencode "text=${TEXT}"               2>&1
           )"
 
           MESSAGE_ID="$(
             echo "$RESPONSE" |
-              jq -r '.result.message_id // empty' \
-              2>/dev/null
+              jq -r '.result.message_id // empty'               2>/dev/null
           )"
 
           if [ -n "$MESSAGE_ID" ]; then
@@ -406,8 +379,7 @@ jobs:
               fi
 
               START="$(
-                cat "$STATE_DIR/build_start" \
-                  2>/dev/null ||
+                cat "$STATE_DIR/build_start"                   2>/dev/null ||
                   date +%s
               )"
 
@@ -415,14 +387,12 @@ jobs:
               TOTAL=$((NOW - START))
 
               STAGE="$(
-                cat "$STATE_DIR/current_stage" \
-                  2>/dev/null ||
+                cat "$STATE_DIR/current_stage"                   2>/dev/null ||
                   echo "Initializing"
               )"
 
               STAGE_START="$(
-                cat "$STATE_DIR/current_stage_start" \
-                  2>/dev/null ||
+                cat "$STATE_DIR/current_stage_start"                   2>/dev/null ||
                   echo "$NOW"
               )"
 
@@ -434,14 +404,9 @@ jobs:
                 if [ "$S" -lt 60 ]; then
                   printf "%02ds" "$S"
                 elif [ "$S" -lt 3600 ]; then
-                  printf "%02dm %02ds" \
-                    "$((S / 60))" \
-                    "$((S % 60))"
+                  printf "%02dm %02ds"                     "$((S / 60))"                     "$((S % 60))"
                 else
-                  printf "%02dh %02dm %02ds" \
-                    "$((S / 3600))" \
-                    "$(((S % 3600) / 60))" \
-                    "$((S % 60))"
+                  printf "%02dh %02dm %02ds"                     "$((S / 3600))"                     "$(((S % 3600) / 60))"                     "$((S % 60))"
                 fi
               }
 
@@ -450,29 +415,10 @@ jobs:
               }
 
               TEXT="$(
-                printf \
-                  '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🔵 <b>BUILDING</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>%s</code>\n🖥 Runner: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔵 <b>CURRENT STAGE</b>\n🏗️ <b>%s</b>\n⏱️ Stage: <code>%s</code>\n⏱️ Total: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
-                  "$(escape_html "$FOX_BRANCH")" \
-                  "$(escape_html "$TARGET")" \
-                  "$(escape_html "${DEVICE_NAME:-detecting...}")" \
-                  "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
-                  "$(escape_html "$STAGE")" \
-                  "$(format_time "$STAGE_TIME")" \
-                  "$(format_time "$TOTAL")" \
-                  "$GITHUB_REPOSITORY" \
-                  "$GITHUB_RUN_ID"
+                printf                   '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🔵 <b>BUILDING</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>%s</code>\n🖥 Runner: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔵 <b>CURRENT STAGE</b>\n🏗️ <b>%s</b>\n⏱️ Stage: <code>%s</code>\n⏱️ Total: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>'                   "$(escape_html "$FOX_BRANCH")"                   "$(escape_html "$TARGET")"                   "$(escape_html "${DEVICE_NAME:-detecting...}")"                   "$(escape_html "${{ inputs.RUNNER_TYPE }}")"                   "$(escape_html "$STAGE")"                   "$(format_time "$STAGE_TIME")"                   "$(format_time "$TOTAL")"                   "$GITHUB_REPOSITORY"                   "$GITHUB_RUN_ID"
               )"
 
-              curl -sS \
-                --connect-timeout 5 \
-                --max-time 15 \
-                -X POST \
-                "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
-                -d "chat_id=${TG_CHAT_ID}" \
-                -d "message_id=$(cat "$STATE_DIR/telegram_message_id")" \
-                --data-urlencode "parse_mode=HTML" \
-                --data-urlencode "text=${TEXT}" \
-                >/dev/null 2>&1 || true
+              curl -sS                 --connect-timeout 5                 --max-time 15                 -X POST                 "https://api.telegram.org/bot${TG_TOKEN}/editMessageText"                 -d "chat_id=${TG_CHAT_ID}"                 -d "message_id=$(cat "$STATE_DIR/telegram_message_id")"                 --data-urlencode "parse_mode=HTML"                 --data-urlencode "text=${TEXT}"                 >/dev/null 2>&1 || true
 
             done
           ) &
@@ -491,31 +437,7 @@ jobs:
 
           sudo apt-get update -qq 2>&1 | tee -a "$STATE_DIR/build.log"
 
-          sudo apt-get install -y \
-            aria2 \
-            jq \
-            curl \
-            wget \
-            git \
-            ccache \
-            patchelf \
-            cpio \
-            lz4 \
-            unzip \
-            rsync \
-            bc \
-            bison \
-            flex \
-            gperf \
-            build-essential \
-            zip \
-            python3 \
-            python3-pip \
-            libssl-dev \
-            libelf-dev \
-            libxml2-utils \
-            xsltproc \
-            2>&1 | tee -a "$STATE_DIR/build.log"
+          sudo apt-get install -y             aria2             jq             curl             wget             git             ccache             patchelf             cpio             lz4             unzip             rsync             bc             bison             flex             gperf             build-essential             zip             python3             python3-pip             libssl-dev             libelf-dev             libxml2-utils             xsltproc             2>&1 | tee -a "$STATE_DIR/build.log"
 
           if [ -d "$HOME/ofox-scripts/.git" ]; then
             cd "$HOME/ofox-scripts"
@@ -523,10 +445,7 @@ jobs:
             git reset --hard origin/HEAD 2>&1 | tee -a "$STATE_DIR/build.log" || true
           else
             rm -rf "$HOME/ofox-scripts"
-            git clone \
-              --depth=1 \
-              https://gitlab.com/OrangeFox/misc/scripts \
-              "$HOME/ofox-scripts" 2>&1 | tee -a "$STATE_DIR/build.log"
+            git clone               --depth=1               https://gitlab.com/OrangeFox/misc/scripts               "$HOME/ofox-scripts" 2>&1 | tee -a "$STATE_DIR/build.log"
           fi
 
           cd "$HOME/ofox-scripts"
@@ -623,9 +542,7 @@ jobs:
           git config --global fetch.parallel 4
 
           if [ -n "${GT_TOKEN:-}" ]; then
-            git config --global \
-              url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf \
-              "https://github.com/"
+            git config --global               url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf               "https://github.com/"
           fi
 
           "$STATE_DIR/stage_end.sh" "Configure git" success
@@ -716,10 +633,7 @@ jobs:
           # FIRST ATTEMPT
           # --------------------------------------------------------
 
-          ./orangefox_sync.sh \
-            --branch "$SYNC_BRANCH" \
-            --path "$SYNC_PATH" \
-            2>&1 | tee -a "$SYNC_LOG"
+          ./orangefox_sync.sh             --branch "$SYNC_BRANCH"             --path "$SYNC_PATH"             2>&1 | tee -a "$SYNC_LOG"
 
           SYNC_STATUS=${PIPESTATUS[0]}
 
@@ -808,8 +722,7 @@ jobs:
 
           # Remove old LZ4 flag that breaks newer OrangeFox ramdisk
           if [ -f "$TREE_PATH/BoardConfig.mk" ]; then
-            sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d' \
-              "$TREE_PATH/BoardConfig.mk" || true
+            sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d'               "$TREE_PATH/BoardConfig.mk" || true
           fi
 
           {
@@ -849,12 +762,9 @@ jobs:
             API_HEADERS+=(-H "Authorization: Bearer ${GT_TOKEN}")
           fi
 
-          RESPONSE="$(curl -fsSL \
-            "${API_HEADERS[@]}" \
-            https://api.github.com/repos/topjohnwu/Magisk/releases/latest)"
+          RESPONSE="$(curl -fsSL             "${API_HEADERS[@]}"             https://api.github.com/repos/topjohnwu/Magisk/releases/latest)"
 
-          URL="$(echo "$RESPONSE" | jq -r \
-            '[.assets[] | select(.name | test("^Magisk-.*\\.apk$")) | .browser_download_url][0]')"
+          URL="$(echo "$RESPONSE" | jq -r             '[.assets[] | select(.name | test("^Magisk-.*\.apk$")) | .browser_download_url][0]')"
 
           if [ -z "$URL" ] || [ "$URL" = "null" ]; then
             echo "::error::No Magisk APK was found in the latest release."
@@ -889,7 +799,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # ============================================================
-      # CLEAN PATCH STATE (CRITICAL FIX)
+      # CLEAN PATCH STATE
       # ============================================================
       - name: Clean OrangeFox patch state
         shell: bash
@@ -900,11 +810,9 @@ jobs:
 
           echo "Cleaning OrangeFox patch artifacts..."
 
-          # Remove any leftover reject files
           find . -name "*.rej" -type f -delete 2>/dev/null || true
           find . -name "*.orig" -type f -delete 2>/dev/null || true
 
-          # Reset known directories that OrangeFox patches
           for d in system/vold system/libvintf bootable/recovery vendor/recovery; do
             if [ -d "$d/.git" ]; then
               (cd "$d" && git checkout -f -- . >/dev/null 2>&1 && git clean -fd >/dev/null 2>&1) || true
@@ -915,7 +823,7 @@ jobs:
           echo "Patch artifacts cleaned."
 
       # ============================================================
-      # BUILD ORANGEFOX (THE REAL FIX)
+      # BUILD ORANGEFOX — THE REAL FIX
       # ============================================================
       - name: Build OrangeFox
         shell: bash
@@ -924,35 +832,29 @@ jobs:
 
           cd "$SYNC_PATH"
 
-          # CRITICAL: Export TOP before sourcing envsetup.sh
-          export TOP="$SYNC_PATH"
-          export ZSH_VERSION=""
-
-          # Disable strict mode around envsetup.sh because apply_patches.sh
-          # might fail on already-patched files, but we still need lunch/mka
+          # OrangeFox envsetup.sh has bugs: it may fail on apply_patches.sh
+          # and uses unbound variables like BUILD_VAR_CACHE_READY.
+          # We MUST disable both -e and -u for the entire build phase.
           set +e
           set +u
 
-          # DO NOT PIPE source to tee - it breaks function definitions in bash
+          export TOP="$SYNC_PATH"
+          export ZSH_VERSION=""
+
           source build/envsetup.sh
           ENVSETUP_STATUS=$?
 
-          # Verify lunch was actually defined
+          # Verify lunch is available
           if ! type lunch >/dev/null 2>&1; then
-            echo "::error::lunch command not found after sourcing envsetup.sh (exit code: $ENVSETUP_STATUS)"
+            echo "::error::lunch command not found after envsetup.sh (exit: $ENVSETUP_STATUS)"
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
             exit 1
           fi
 
-          # If envsetup.sh failed but lunch is available, it's just patches
           if [ "$ENVSETUP_STATUS" -ne 0 ]; then
-            echo "::warning::envsetup.sh exited with code $ENVSETUP_STATUS (likely patch failure). lunch is available. Continuing build..."
+            echo "::warning::envsetup.sh exited $ENVSETUP_STATUS (patch conflict). lunch works. Continuing..."
           fi
-
-          # Re-enable strict mode for the rest
-          set -e
-          set -u
 
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
           export OF_MAINTAINER="$OF_MAINTAINER"
@@ -980,10 +882,8 @@ jobs:
 
           echo "Lunch target: $LUNCH_TARGET"
 
-          set +e
           lunch "$LUNCH_TARGET"
           LUNCH_STATUS=$?
-          set -e
 
           if [ "$LUNCH_STATUS" -ne 0 ]; then
             echo "::error::lunch failed with code $LUNCH_STATUS"
@@ -995,6 +895,14 @@ jobs:
           make clean
 
           mka adbd "$TARGET"
+          MKA_STATUS=$?
+
+          if [ "$MKA_STATUS" -ne 0 ]; then
+            echo "::error::mka failed with code $MKA_STATUS"
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
+            exit 1
+          fi
 
           "$STATE_DIR/stage_end.sh" "Build OrangeFox" success
 
@@ -1102,9 +1010,7 @@ jobs:
 
           FILE="$IMAGE_PATH"
 
-          RESULT="$(curl -skT "$FILE" \
-            "https://oshi.at/OrangeFox-${DEVICE_NAME}-${TARGET}.img/20160" \
-            2>/dev/null || true)"
+          RESULT="$(curl -skT "$FILE"             "https://oshi.at/OrangeFox-${DEVICE_NAME}-${TARGET}.img/20160"             2>/dev/null || true)"
 
           LINK="$(echo "$RESULT" | awk '/DL:/ {print $2; exit}')"
 
@@ -1127,19 +1033,14 @@ jobs:
 
           FILE="$IMAGE_PATH"
 
-          SERVER="$(curl -fsSL \
-            https://api.gofile.io/servers \
-            | jq -r '.data.servers[0].name // empty' 2>/dev/null || true)"
+          SERVER="$(curl -fsSL             https://api.gofile.io/servers             | jq -r '.data.servers[0].name // empty' 2>/dev/null || true)"
 
           if [ -z "$SERVER" ]; then
             echo "Could not obtain a Gofile server."
             exit 0
           fi
 
-          RESPONSE="$(curl -fsSL \
-            -F "file=@${FILE}" \
-            "https://${SERVER}.gofile.io/uploadFile" \
-            2>/dev/null || true)"
+          RESPONSE="$(curl -fsSL             -F "file=@${FILE}"             "https://${SERVER}.gofile.io/uploadFile"             2>/dev/null || true)"
 
           LINK="$(echo "$RESPONSE" | jq -r '.data.downloadPage // empty' 2>/dev/null || true)"
 
@@ -1151,7 +1052,7 @@ jobs:
           fi
 
       # ============================================================
-      # TELEGRAM COMPLETED
+      # TELEGRAM COMPLETED — SMART FAILURE DETECTION
       # ============================================================
       - name: Telegram - build completed
         if: always()
@@ -1184,10 +1085,33 @@ jobs:
             "$STATE_DIR/tg_escape.sh" "$1"
           }
 
+          # ── Detect failure reason ──────────────────────────────
+          FAILED_STAGE=""
+          FAILURE_REASON=""
+
+          if [ -f "$STATE_DIR/failed_stage" ]; then
+            FAILED_STAGE="$(cat "$STATE_DIR/failed_stage" 2>/dev/null)"
+          fi
+
+          if [ -f "$STATE_DIR/failure_reason" ]; then
+            FAILURE_REASON="$(cat "$STATE_DIR/failure_reason" 2>/dev/null)"
+          fi
+
+          # Try to extract last error from build log
+          LAST_ERROR=""
+          if [ -f "$STATE_DIR/build.log" ] && [ "${{ job.status }}" != "success" ]; then
+            LAST_ERROR="$(grep -Ei 'error:|fatal:|FAILED|failed with' "$STATE_DIR/build.log" | tail -1 | sed 's/^[[:space:]]*//' || true)"
+            if [ -z "$LAST_ERROR" ] && [ -f "$STATE_DIR/sync.log" ]; then
+              LAST_ERROR="$(grep -Ei 'error:|fatal:|FAILED' "$STATE_DIR/sync.log" | tail -1 | sed 's/^[[:space:]]*//' || true)"
+            fi
+          fi
+
           if [ "${{ job.status }}" = "success" ]; then
             STATUS="✅ <b>BUILD SUCCESSFUL</b>"
+            STATUS_ICON="🟢"
           else
             STATUS="❌ <b>BUILD FAILED</b>"
+            STATUS_ICON="🔴"
           fi
 
           DEVICE="${DEVICE_NAME:-unknown}"
@@ -1195,39 +1119,42 @@ jobs:
           RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_ID}"
           LOG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
+          # Build smart failure details
+          DETAILS=""
+          if [ "${{ job.status }}" != "success" ]; then
+            DETAILS="\n\n🔍 <b>FAILURE ANALYSIS</b>"
+            if [ -n "$FAILED_STAGE" ]; then
+              DETAILS="${DETAILS}\n📍 Stage: <code>$(escape_html "$FAILED_STAGE")</code>"
+            fi
+            if [ -n "$FAILURE_REASON" ]; then
+              DETAILS="${DETAILS}\n🏷️ Class: <code>$(escape_html "$FAILURE_REASON")</code>"
+            fi
+            if [ -n "$LAST_ERROR" ]; then
+              # Truncate if too long
+              if [ "${#LAST_ERROR}" -gt 200 ]; then
+                LAST_ERROR="${LAST_ERROR:0:200}..."
+              fi
+              DETAILS="${DETAILS}\n💥 Last error: <code>$(escape_html "$LAST_ERROR")</code>"
+            fi
+            if [ -z "$FAILED_STAGE" ] && [ -z "$FAILURE_REASON" ] && [ -z "$LAST_ERROR" ]; then
+              DETAILS="${DETAILS}\n⚠️ Unknown failure — check logs."
+            fi
+          fi
+
           TEXT="$(
-            printf \
-              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n%s\n\n📱 Device: <code>%s</code>\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🔢 MD5: <code>%s</code>\n🖥 Runner: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n📦 <a href="%s">GitHub Release</a>\n🔗 <a href="%s">Build Logs</a>' \
-              "$STATUS" \
-              "$(escape_html "$DEVICE")" \
-              "$(escape_html "$FOX_BRANCH")" \
-              "$(escape_html "$TARGET")" \
-              "$(escape_html "$MD5")" \
-              "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
-              "$(escape_html "$OF_MAINTAINER")" \
-              "$RELEASE_URL" \
-              "$LOG_URL"
+            printf               '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n%s\n\n📱 Device: <code>%s</code>\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🔢 MD5: <code>%s</code>\n🖥 Runner: <code>%s</code>\n👤 Maintainer: <code>%s</code>%s\n\n📦 <a href="%s">GitHub Release</a>\n🔗 <a href="%s">Build Logs</a>'               "$STATUS"               "$(escape_html "$DEVICE")"               "$(escape_html "$FOX_BRANCH")"               "$(escape_html "$TARGET")"               "$(escape_html "$MD5")"               "$(escape_html "${{ inputs.RUNNER_TYPE }}")"               "$(escape_html "$OF_MAINTAINER")"               "$DETAILS"               "$RELEASE_URL"               "$LOG_URL"
           )"
 
           if [ -n "${OSHI_LINK:-}" ]; then
-            TEXT="${TEXT}\n☁️ <a href=\"${OSHI_LINK}\">oshi.at</a>"
+            TEXT="${TEXT}\n☁️ <a href="${OSHI_LINK}">oshi.at</a>"
           fi
 
           if [ -n "${GOFILE_LINK:-}" ]; then
-            TEXT="${TEXT}\n☁️ <a href=\"${GOFILE_LINK}\">Gofile</a>"
+            TEXT="${TEXT}\n☁️ <a href="${GOFILE_LINK}">Gofile</a>"
           fi
 
           RESPONSE="$(
-            curl -sS \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -X POST \
-              "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
-              -d "chat_id=${TG_CHAT_ID}" \
-              -d "message_id=${MESSAGE_ID}" \
-              --data-urlencode "parse_mode=HTML" \
-              --data-urlencode "text=${TEXT}" \
-              2>&1
+            curl -sS               --connect-timeout 10               --max-time 30               -X POST               "https://api.telegram.org/bot${TG_TOKEN}/editMessageText"               -d "chat_id=${TG_CHAT_ID}"               -d "message_id=${MESSAGE_ID}"               --data-urlencode "parse_mode=HTML"               --data-urlencode "text=${TEXT}"               2>&1
           )"
 
           if echo "$RESPONSE" | grep -q '"ok":true'; then
