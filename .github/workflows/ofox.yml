@@ -764,7 +764,7 @@ jobs:
 
           RESPONSE="$(curl -fsSL             "${API_HEADERS[@]}"             https://api.github.com/repos/topjohnwu/Magisk/releases/latest)"
 
-          URL="$(echo "$RESPONSE" | jq -r             '[.assets[] | select(.name | test("^Magisk-.*\.apk$")) | .browser_download_url][0]')"
+          URL="$(echo "$RESPONSE" | jq -r             '[.assets[] | select(.name | test("^Magisk-.*\\.apk$")) | .browser_download_url][0]')"
 
           if [ -z "$URL" ] || [ "$URL" = "null" ]; then
             echo "::error::No Magisk APK was found in the latest release."
