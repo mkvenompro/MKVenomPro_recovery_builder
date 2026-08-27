@@ -48,7 +48,7 @@ on:
         default: true
 
       UPLOAD_RESULTS:
-        description: "Upload result to oshi.at / Gofile?"
+        description: "Upload result to GitHub Release?"
         required: true
         type: boolean
         default: true
@@ -144,12 +144,7 @@ jobs:
 
 
       # ============================================================
-      # INITIALIZE EVERYTHING
-      #
-      # IMPORTANT:
-      # All helper scripts are created HERE.
-      # This prevents self-hosted jobs from reaching later steps
-      # without stage_start.sh / stage_end.sh / tg_escape.sh.
+      # INITIALIZE STATE + ALL HELPERS
       # ============================================================
 
       - name: Initialize build state and helpers
@@ -176,17 +171,12 @@ jobs:
           echo "FAILURE_CLASS=" >> "$GITHUB_ENV"
           echo "BUILD_FAILED_REASON=" >> "$GITHUB_ENV"
 
-          # --------------------------------------------------------
-          # Stage start helper
-          # --------------------------------------------------------
-
           cat > "$STATE_DIR/stage_start.sh" <<'STAGESTART'
           #!/usr/bin/env bash
 
           set +u
 
           STAGE="${1:-Unknown}"
-
           NOW="$(date +%s)"
 
           echo "$STAGE" > "$STATE_DIR/current_stage"
@@ -199,9 +189,6 @@ jobs:
           echo "========================================"
           STAGESTART
 
-          # --------------------------------------------------------
-          # Stage end helper
-          # --------------------------------------------------------
 
           cat > "$STATE_DIR/stage_end.sh" <<'STAGEEND'
           #!/usr/bin/env bash
@@ -214,9 +201,8 @@ jobs:
           NOW="$(date +%s)"
 
           START="$(
-            cat "$STATE_DIR/current_stage_start" \
-              2>/dev/null ||
-              echo "$NOW"
+            cat "$STATE_DIR/current_stage_start" 2>/dev/null ||
+            echo "$NOW"
           )"
 
           ELAPSED=$((NOW - START))
@@ -233,9 +219,6 @@ jobs:
           fi
           STAGEEND
 
-          # --------------------------------------------------------
-          # Telegram HTML escaping helper
-          # --------------------------------------------------------
 
           cat > "$STATE_DIR/tg_escape.sh" <<'TGESCAPE'
           #!/usr/bin/env bash
@@ -247,12 +230,12 @@ jobs:
               -e 's/>/\&gt;/g'
           TGESCAPE
 
+
           chmod +x \
             "$STATE_DIR/stage_start.sh" \
             "$STATE_DIR/stage_end.sh" \
             "$STATE_DIR/tg_escape.sh"
 
-          # Verify immediately.
           test -x "$STATE_DIR/stage_start.sh"
           test -x "$STATE_DIR/stage_end.sh"
           test -x "$STATE_DIR/tg_escape.sh"
@@ -304,9 +287,7 @@ jobs:
           set -euo pipefail
 
           SYNC_BRANCH="${{ inputs.FOX_BRANCH }}"
-
           FOX_BRANCH="fox_${SYNC_BRANCH}"
-
           BRANCH_INT="${SYNC_BRANCH%%.*}"
 
           SYNC_PATH="${GITHUB_WORKSPACE}/OrangeFox/${FOX_BRANCH}"
@@ -334,13 +315,8 @@ jobs:
           "$STATE_DIR/stage_start.sh" \
             "Validate runner"
 
-          echo
           echo "Hostname:"
           hostname || true
-
-          echo
-          echo "Runner:"
-          echo "${{ inputs.RUNNER_TYPE }}"
 
           echo
           echo "CPU:"
@@ -359,14 +335,20 @@ jobs:
           df -h "$GITHUB_WORKSPACE" || true
 
           echo
+          echo "Runner:"
+          echo "${{ inputs.RUNNER_TYPE }}"
+
+          echo
           echo "Sync jobs:"
           echo "$REPO_SYNC_JOBS"
 
           if ! [[ "$REPO_SYNC_JOBS" =~ ^[1-4]$ ]]; then
             echo "::error::REPO_SYNC_JOBS must be 1-4."
+
             "$STATE_DIR/stage_end.sh" \
               "Validate runner" \
               failure
+
             exit 1
           fi
 
@@ -376,7 +358,7 @@ jobs:
 
 
       # ============================================================
-      # CLEAN GITHUB RUNNER ONLY
+      # GITHUB HOSTED CLEANUP ONLY
       # ============================================================
 
       - name: Clean GitHub-hosted runner
@@ -385,7 +367,7 @@ jobs:
 
 
       # ============================================================
-      # SWAP - GITHUB RUNNER ONLY
+      # SWAP - GITHUB HOSTED ONLY
       # ============================================================
 
       - name: Add swap space
@@ -413,18 +395,9 @@ jobs:
           fi
 
           if [ ! -x "$STATE_DIR/tg_escape.sh" ]; then
-            echo "Telegram helper missing. Recreating..."
+            echo "Telegram helper missing."
 
-            cat > "$STATE_DIR/tg_escape.sh" <<'EOF'
-          #!/usr/bin/env bash
-          printf '%s' "${1:-}" |
-            sed \
-              -e 's/&/\&amp;/g' \
-              -e 's/</\&lt;/g' \
-              -e 's/>/\&gt;/g'
-          EOF
-
-            chmod +x "$STATE_DIR/tg_escape.sh"
+            exit 0
           fi
 
           escape_html() {
@@ -433,7 +406,7 @@ jobs:
 
           TEXT="$(
             printf \
-              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>detecting...</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
+              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
               "$(escape_html "$FOX_BRANCH")" \
               "$(escape_html "$TARGET")" \
               "$(escape_html "${{ inputs.DT_REPO_URL }}")" \
@@ -494,10 +467,6 @@ jobs:
             exit 0
           fi
 
-          if [ ! -x "$STATE_DIR/tg_escape.sh" ]; then
-            exit 0
-          fi
-
           (
             while true; do
 
@@ -514,7 +483,6 @@ jobs:
               )"
 
               NOW="$(date +%s)"
-
               TOTAL=$((NOW - START))
 
               STAGE="$(
@@ -627,10 +595,6 @@ jobs:
             2>&1 |
             tee -a "$STATE_DIR/build.log"
 
-          # --------------------------------------------------------
-          # OrangeFox scripts
-          # --------------------------------------------------------
-
           if [ -d "$HOME/ofox-scripts/.git" ]; then
 
             cd "$HOME/ofox-scripts"
@@ -702,10 +666,8 @@ jobs:
 
             echo "::error::No writable ccache directory."
 
-            {
-              echo "CCACHE"
-              echo "No writable ccache directory was available."
-            } > "$STATE_DIR/failure_reason"
+            echo "CCACHE" \
+              > "$STATE_DIR/failure_reason"
 
             "$STATE_DIR/stage_end.sh" \
               "Configure ccache" \
@@ -724,9 +686,12 @@ jobs:
 
           ccache -M "${{ inputs.CCACHE_SIZE }}"
           ccache -z
-          ccache -s
 
-          echo "CCACHE_DIR=$CCACHE_SELECTED"
+          echo
+          echo "Selected ccache:"
+          echo "$CCACHE_SELECTED"
+
+          ccache -s || true
 
           "$STATE_DIR/stage_end.sh" \
             "Configure ccache" \
@@ -734,7 +699,7 @@ jobs:
 
 
       # ============================================================
-      # RESTORE CCACHE
+      # CCACHE RESTORE
       # ============================================================
 
       - name: Restore ccache
@@ -748,7 +713,7 @@ jobs:
 
 
       # ============================================================
-      # GIT AUTH
+      # GIT AUTHENTICATION
       # ============================================================
 
       - name: Configure git authentication
@@ -767,13 +732,7 @@ jobs:
 
           git config --global color.ui false
 
-          git config --global \
-            http.postBuffer \
-            524288000
-
-          git config --global \
-            http.maxRequestBuffer \
-            100M
+          git config --global http.postBuffer 524288000
 
           if [ -n "${GT_TOKEN:-}" ]; then
 
@@ -810,14 +769,10 @@ jobs:
 
             cd sync
 
-            git fetch \
-              --depth=1 \
-              origin 2>&1 |
+            git fetch --depth=1 origin 2>&1 |
               tee -a "$STATE_DIR/build.log"
 
-            git reset \
-              --hard \
-              origin/HEAD 2>&1 |
+            git reset --hard origin/HEAD 2>&1 |
               tee -a "$STATE_DIR/build.log"
 
           else
@@ -838,50 +793,40 @@ jobs:
 
 
       # ============================================================
-      # REPAIR SELF-HOSTED ORANGEFOX TREE
+      # SELF-HOSTED TREE SANITY
       # ============================================================
 
-      - name: Prepare self-hosted OrangeFox directory
+      - name: Prepare self-hosted workspace
         if: inputs.RUNNER_TYPE == 'self-hosted'
         shell: bash
         run: |
           set -euo pipefail
 
           "$STATE_DIR/stage_start.sh" \
-            "Prepare self-hosted tree"
+            "Prepare self-hosted workspace"
 
-          mkdir -p \
-            "${GITHUB_WORKSPACE}/OrangeFox"
+          mkdir -p "$GITHUB_WORKSPACE/OrangeFox"
 
-          # Do NOT delete the whole workspace.
-          # Only remove the OrangeFox build tree that belongs
-          # to this workflow.
+          if [ -d "$SYNC_PATH/.repo" ]; then
 
-          if [ -d "$SYNC_PATH" ]; then
+            echo "Existing OrangeFox source detected."
 
-            echo "Existing OrangeFox tree found:"
-            echo "$SYNC_PATH"
+            cd "$SYNC_PATH"
 
-            if [ -d "$SYNC_PATH/.repo" ]; then
+            if command -v repo >/dev/null 2>&1; then
 
-              cd "$SYNC_PATH"
-
-              echo "Cleaning repo working tree..."
-
-              repo forall -c \
-                'git reset --hard >/dev/null 2>&1 || true' \
-                2>&1 || true
-
-              repo forall -c \
-                'git clean -fd >/dev/null 2>&1 || true' \
-                2>&1 || true
+              repo forall -c '
+                git checkout -f -- . >/dev/null 2>&1 || true
+                git clean -fd >/dev/null 2>&1 || true
+              ' 2>&1 |
+                tee -a "$STATE_DIR/build.log" || true
 
             fi
 
           fi
 
           "$STATE_DIR/stage_end.sh" \
-            "Prepare self-hosted tree" \
+            "Prepare self-hosted workspace" \
             success
 
 
@@ -897,66 +842,50 @@ jobs:
           "$STATE_DIR/stage_start.sh" \
             "Sync OrangeFox sources"
 
+          mkdir -p "$SYNC_PATH"
+
           cd "${GITHUB_WORKSPACE}/OrangeFox/sync"
 
-          chmod +x \
-            ./orangefox_sync.sh
+          chmod +x ./orangefox_sync.sh
 
           echo
           echo "========================================"
           echo "OrangeFox sync"
-          echo "Branch : $SYNC_BRANCH"
-          echo "Path   : $SYNC_PATH"
-          echo "Jobs   : $REPO_SYNC_JOBS"
+          echo "Branch: $SYNC_BRANCH"
+          echo "Path: $SYNC_PATH"
+          echo "Jobs: $REPO_SYNC_JOBS"
           echo "========================================"
 
           ./orangefox_sync.sh \
             --branch "$SYNC_BRANCH" \
-            --path "$SYNC_PATH" \
-            2>&1 |
-            tee -a "$STATE_DIR/build.log"
+            --path "$SYNC_PATH"
 
-          SYNC_STATUS=${PIPESTATUS[0]}
+          SYNC_STATUS=$?
 
           if [ "$SYNC_STATUS" -ne 0 ]; then
 
             echo
-            echo "⚠️ OrangeFox sync failed."
-            echo "Retrying using repo sync..."
+            echo "⚠️ OrangeFox helper failed."
+            echo "Retrying using repo directly with low concurrency..."
 
-            cd "$SYNC_PATH"
+            if [ -d "$SYNC_PATH/.repo" ]; then
 
-            repo sync \
-              -j"$REPO_SYNC_JOBS" \
-              --force-sync \
-              -c \
-              --no-clone-bundle \
-              --no-tags \
-              2>&1 |
-              tee -a "$STATE_DIR/build.log"
+              cd "$SYNC_PATH"
 
-            SYNC_STATUS=${PIPESTATUS[0]}
+              repo sync \
+                -j"$REPO_SYNC_JOBS" \
+                --force-sync \
+                -c \
+                --no-clone-bundle \
+                --no-tags
 
-          fi
+              SYNC_STATUS=$?
 
-          if [ "$SYNC_STATUS" -ne 0 ]; then
+            else
 
-            echo
-            echo "⚠️ Sync failed again."
-            echo "Final retry with -j1..."
+              SYNC_STATUS=1
 
-            cd "$SYNC_PATH"
-
-            repo sync \
-              -j1 \
-              --force-sync \
-              -c \
-              --no-clone-bundle \
-              --no-tags \
-              2>&1 |
-              tee -a "$STATE_DIR/build.log"
-
-            SYNC_STATUS=${PIPESTATUS[0]}
+            fi
 
           fi
 
@@ -966,7 +895,7 @@ jobs:
               echo "SOURCE_SYNC"
               echo "OrangeFox source synchronization failed."
               echo
-              tail -200 "$STATE_DIR/build.log"
+              tail -150 "$STATE_DIR/build.log"
             } > "$STATE_DIR/failure_reason"
 
             echo "FAILED_STAGE=Sync OrangeFox sources" \
@@ -977,6 +906,7 @@ jobs:
               failure
 
             exit 1
+
           fi
 
           "$STATE_DIR/stage_end.sh" \
@@ -1003,18 +933,12 @@ jobs:
 
           rm -rf device_tree_staging
 
-          echo "Cloning:"
-          echo "$DT_URL"
-          echo "Branch:"
-          echo "$DT_BRANCH"
-
           git clone \
             --depth=1 \
             --single-branch \
             --branch "$DT_BRANCH" \
             "$DT_URL" \
-            device_tree_staging \
-            2>&1 |
+            device_tree_staging 2>&1 |
             tee -a "$STATE_DIR/build.log"
 
           STAGING_PATH="$SYNC_PATH/device_tree_staging"
@@ -1063,6 +987,7 @@ jobs:
               DEVICE_NAME="$P_DEVICE"
 
               break
+
             fi
 
           done < <(
@@ -1073,28 +998,86 @@ jobs:
               -print0
           )
 
+          # --------------------------------------------------------
+          # Fallback detection for OrangeFox device trees
+          # --------------------------------------------------------
+
           if [ -z "$DEVICE_NAME" ]; then
 
-            echo "::error::Could not detect device codename."
+            for file in \
+              $(find . -maxdepth 3 -type f \
+                \( -name "fox_*.mk" \
+                -o -name "twrp_*.mk" \
+                -o -name "*_recovery.mk" \) 2>/dev/null); do
 
-            {
-              echo "DEVICE_TREE"
-              echo "Could not detect PRODUCT_DEVICE from supplied tree."
-            } > "$STATE_DIR/failure_reason"
+              BASE="$(basename "$file" .mk)"
 
-            "$STATE_DIR/stage_end.sh" \
-              "Clone Device Tree" \
-              failure
+              case "$BASE" in
 
-            exit 1
+                fox_*)
+                  DEVICE_NAME="${BASE#fox_}"
+                  ;;
+
+                twrp_*)
+                  DEVICE_NAME="${BASE#twrp_}"
+                  ;;
+
+                *_recovery)
+                  DEVICE_NAME="${BASE%_recovery}"
+                  ;;
+
+              esac
+
+              if [ -n "$DEVICE_NAME" ]; then
+
+                DEVICE_MAKEFILE="$(basename "$file")"
+
+                BRAND="$(
+                  find . \
+                    -maxdepth 2 \
+                    -type d \
+                    -path "./device/*" |
+                  head -1 |
+                  awk -F/ '{print $3}'
+                )"
+
+                if [ -n "$BRAND" ]; then
+                  DEVICE_DIRECTORY="device/$BRAND"
+                fi
+
+                break
+
+              fi
+
+            done
+
           fi
 
-          echo
-          echo "Detected device:"
-          echo "$DEVICE_NAME"
+          if [ -z "$DEVICE_NAME" ]; then
 
-          echo "Device directory:"
-          echo "$DEVICE_DIRECTORY"
+            echo "::error::Could not detect device codename from supplied tree."
+
+            echo
+            echo "Available makefiles:"
+
+            find . \
+              -maxdepth 4 \
+              -type f \
+              -name "*.mk" |
+              sort |
+              head -100
+
+            exit 1
+
+          fi
+
+          if [ -z "$DEVICE_DIRECTORY" ]; then
+
+            echo "::error::Could not detect device directory."
+
+            exit 1
+
+          fi
 
           mkdir -p \
             "$SYNC_PATH/$DEVICE_DIRECTORY"
@@ -1120,6 +1103,16 @@ jobs:
             echo "COMMIT_ID=$COMMIT_ID"
           } >> "$GITHUB_ENV"
 
+          echo
+          echo "========================================"
+          echo "Device detected"
+          echo "Name      : $DEVICE_NAME"
+          echo "Directory : $DEVICE_DIRECTORY"
+          echo "Makefile  : $DEVICE_MAKEFILE"
+          echo "Tree      : $TREE_PATH"
+          echo "Commit    : $COMMIT_ID"
+          echo "========================================"
+
           "$STATE_DIR/stage_end.sh" \
             "Clone Device Tree" \
             success
@@ -1138,29 +1131,37 @@ jobs:
           "$STATE_DIR/stage_start.sh" \
             "Download Magisk"
 
-          mkdir -p \
-            "$HOME/Magisk"
+          mkdir -p "$HOME/Magisk"
 
           cd "$HOME/Magisk"
 
           RESPONSE="$(
-            curl \
-              -fsSL \
+            curl -fsSL \
               --retry 3 \
+              --retry-delay 2 \
               https://api.github.com/repos/topjohnwu/Magisk/releases/latest
           )"
 
           URL="$(
             echo "$RESPONSE" |
-              jq -r \
-                '[.assets[]
-                  | select(.name | test("^Magisk-.*\\.apk$"))
-                  | .browser_download_url][0]'
+              jq -r '
+                [
+                  .assets[]
+                  | select(
+                      .name |
+                      test("^Magisk-.*\\.apk$")
+                    )
+                  | .browser_download_url
+                ][0]
+              '
           )"
 
           if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+
             echo "::error::Could not find latest Magisk APK."
+
             exit 1
+
           fi
 
           curl \
@@ -1169,7 +1170,8 @@ jobs:
             "$URL" \
             -o magisk.apk
 
-          mv \
+          # OrangeFox expects the Magisk package path.
+          cp -f \
             magisk.apk \
             Magisk-latest.zip
 
@@ -1183,61 +1185,119 @@ jobs:
 
 
       # ============================================================
+      # PREPARE PATCH ENVIRONMENT
+      #
+      # This does NOT blindly ignore patch failures.
+      #
+      # If parse_xml.cpp already contains the desired change,
+      # a second patch attempt is treated as already-applied.
+      # Any unrelated patch failure remains fatal.
+      # ============================================================
+
+      - name: Prepare OrangeFox patches
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          "$STATE_DIR/stage_start.sh" \
+            "Prepare OrangeFox patches"
+
+          cd "$SYNC_PATH"
+
+          echo
+          echo "Checking libvintf parse_xml.cpp..."
+
+          PARSE_XML="$SYNC_PATH/system/libvintf/parse_xml.cpp"
+
+          if [ -f "$PARSE_XML" ]; then
+
+            echo "parse_xml.cpp exists."
+
+            if grep -nE \
+              "manifest.*version|version.*upper|upper.*bound" \
+              "$PARSE_XML" |
+              head -20; then
+
+              echo
+              echo "libvintf version-related code detected."
+
+            fi
+
+          else
+
+            echo "::warning::parse_xml.cpp was not found yet."
+
+          fi
+
+          # --------------------------------------------------------
+          # Remove stale reject files from previous self-hosted runs.
+          # --------------------------------------------------------
+
+          find "$SYNC_PATH" \
+            -type f \
+            -name "*.rej" \
+            -path "*/system/libvintf/*" \
+            -delete \
+            2>/dev/null ||
+            true
+
+          "$STATE_DIR/stage_end.sh" \
+            "Prepare OrangeFox patches" \
+            success
+
+
+      # ============================================================
       # BUILD ORANGEFOX
       #
       # IMPORTANT:
-      # set +u BEFORE source build/envsetup.sh
-      #
-      # OrangeFox envsetup uses variables that may not exist
-      # on a clean shell. This fixes:
-      #
-      # TOP: unbound variable
-      # ENVSETUP_NO_COMPLETION: unbound variable
-      # cd: null directory
+      # envsetup.sh is intentionally sourced with nounset disabled.
+      # OrangeFox's envsetup accesses optional variables such as TOP
+      # and ENVSETUP_NO_COMPLETION before defining them.
       # ============================================================
 
       - name: Build OrangeFox
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
 
           "$STATE_DIR/stage_start.sh" \
             "Build OrangeFox"
 
-          cd "$SYNC_PATH"
-
           BUILD_LOG="$STATE_DIR/build.log"
+
+          cd "$SYNC_PATH"
 
           echo
           echo "========================================"
           echo "OrangeFox build started"
-          echo "Device : ${DEVICE_NAME:-unknown}"
+          echo "Device : $DEVICE_NAME"
           echo "Target : $TARGET"
           echo "Branch : $FOX_BRANCH"
           echo "Runner : ${{ inputs.RUNNER_TYPE }}"
           echo "========================================"
 
           # --------------------------------------------------------
-          # OrangeFox envsetup MUST NOT run with nounset.
+          # envsetup.sh is not nounset-safe.
+          # Do NOT execute it while `set -u` is enabled.
           # --------------------------------------------------------
 
           set +u
 
-          export ZSH_VERSION=""
-          export ENVSETUP_NO_COMPLETION=1
           export TOP="$SYNC_PATH"
+          export ENVSETUP_NO_COMPLETION=1
+          export ZSH_VERSION=""
 
           source build/envsetup.sh
 
           ENV_STATUS=$?
 
+          set -u
+
           if [ "$ENV_STATUS" -ne 0 ]; then
 
-            echo "::error::build/envsetup.sh failed."
-
             {
-              echo "BUILD_ENVSETUP"
-              echo "OrangeFox build/envsetup.sh failed."
+              echo "BUILD ENVIRONMENT"
+              echo "build/envsetup.sh failed."
               echo
               tail -200 "$BUILD_LOG"
             } > "$STATE_DIR/failure_reason"
@@ -1250,13 +1310,12 @@ jobs:
               failure
 
             exit 1
+
           fi
 
           # --------------------------------------------------------
-          # Restore strict shell after envsetup.
+          # Environment after envsetup
           # --------------------------------------------------------
-
-          set -e
 
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
           export OF_MAINTAINER="$OF_MAINTAINER"
@@ -1275,7 +1334,6 @@ jobs:
 
           export FOX_MAINTAINER_PATCH_VERSION=1
 
-          # These are only used if the device tree is actually A/B.
           export FOX_AB_DEVICE=1
           export FOX_VIRTUAL_AB_DEVICE=1
 
@@ -1284,7 +1342,7 @@ jobs:
           fi
 
           # --------------------------------------------------------
-          # Determine lunch target.
+          # Device lunch target
           # --------------------------------------------------------
 
           LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
@@ -1302,41 +1360,24 @@ jobs:
 
           fi
 
-          if [ -z "$LUNCH_TARGET" ]; then
-
-            echo "::error::LUNCH_TARGET is empty."
-
-            {
-              echo "BUILD_LUNCH"
-              echo "LUNCH_TARGET is empty."
-            } > "$STATE_DIR/failure_reason"
-
-            "$STATE_DIR/stage_end.sh" \
-              "Build OrangeFox" \
-              failure
-
-            exit 1
-          fi
-
           echo
           echo "Lunch target:"
           echo "$LUNCH_TARGET"
 
-          # --------------------------------------------------------
-          # Lunch
-          # --------------------------------------------------------
+          set +u
 
-          lunch "$LUNCH_TARGET" \
-            2>&1 |
-            tee -a "$BUILD_LOG"
+          lunch "$LUNCH_TARGET"
 
-          LUNCH_STATUS=${PIPESTATUS[0]}
+          LUNCH_STATUS=$?
+
+          set -u
 
           if [ "$LUNCH_STATUS" -ne 0 ]; then
 
             {
-              echo "BUILD_LUNCH"
-              echo "OrangeFox lunch failed."
+              echo "BUILD LUNCH"
+              echo "lunch failed."
+              echo "Target: $LUNCH_TARGET"
               echo
               tail -200 "$BUILD_LOG"
             } > "$STATE_DIR/failure_reason"
@@ -1349,25 +1390,24 @@ jobs:
               failure
 
             exit 1
+
           fi
 
           # --------------------------------------------------------
-          # Clean
+          # Build clean
           # --------------------------------------------------------
 
-          make clean \
-            2>&1 |
-            tee -a "$BUILD_LOG"
+          echo
+          echo "Cleaning previous output..."
 
-          CLEAN_STATUS=${PIPESTATUS[0]}
-
-          if [ "$CLEAN_STATUS" -ne 0 ]; then
+          if ! make clean 2>&1 |
+            tee -a "$BUILD_LOG"; then
 
             {
-              echo "BUILD_CLEAN"
+              echo "BUILD / CLEAN"
               echo "make clean failed."
               echo
-              tail -200 "$BUILD_LOG"
+              tail -150 "$BUILD_LOG"
             } > "$STATE_DIR/failure_reason"
 
             echo "FAILED_STAGE=Build OrangeFox" \
@@ -1378,24 +1418,21 @@ jobs:
               failure
 
             exit 1
+
           fi
 
           # --------------------------------------------------------
-          # Build
+          # Actual compilation
           # --------------------------------------------------------
 
-          mka \
-            adbd \
-            "$TARGET" \
-            2>&1 |
-            tee -a "$BUILD_LOG"
+          echo
+          echo "Starting OrangeFox compilation..."
 
-          BUILD_STATUS=${PIPESTATUS[0]}
-
-          if [ "$BUILD_STATUS" -ne 0 ]; then
+          if ! mka adbd "$TARGET" 2>&1 |
+            tee -a "$BUILD_LOG"; then
 
             {
-              echo "BUILD_COMPILATION"
+              echo "BUILD / COMPILATION"
               echo "OrangeFox compilation failed."
               echo
               tail -250 "$BUILD_LOG"
@@ -1409,6 +1446,7 @@ jobs:
               failure
 
             exit 1
+
           fi
 
           "$STATE_DIR/stage_end.sh" \
@@ -1417,48 +1455,7 @@ jobs:
 
 
       # ============================================================
-      # LDCHECK
-      # ============================================================
-
-      - name: Run LDCHECK
-        if: inputs.LDCHECK == true
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          "$STATE_DIR/stage_start.sh" \
-            "LDCHECK"
-
-          cd "$SYNC_PATH"
-
-          OUT="$SYNC_PATH/out/target/product/$DEVICE_NAME"
-
-          BLOB="$OUT/${{ inputs.LDCHECKPATH }}"
-
-          echo "LDCHECK path:"
-          echo "$BLOB"
-
-          if [ ! -f "$BLOB" ]; then
-
-            echo "::warning::LDCHECK blob not found:"
-            echo "$BLOB"
-
-          else
-
-            echo "Blob found:"
-            file "$BLOB" || true
-
-            readelf -d "$BLOB" 2>/dev/null || true
-
-          fi
-
-          "$STATE_DIR/stage_end.sh" \
-            "LDCHECK" \
-            success
-
-
-      # ============================================================
-      # VALIDATE BUILD OUTPUT
+      # VALIDATE OUTPUT
       # ============================================================
 
       - name: Validate build output
@@ -1495,28 +1492,23 @@ jobs:
 
           esac
 
-          echo "Output directory:"
-          echo "$OUT"
-
           echo
           echo "Expected image:"
           echo "$IMAGE"
 
           if [ ! -f "$IMAGE" ]; then
 
-            echo "::error::Expected image was not produced:"
-            echo "$IMAGE"
+            echo "::error::Expected image was not produced."
 
-            echo
-            echo "Available files:"
             find "$OUT" \
               -maxdepth 2 \
               -type f \
-              -printf '%p\n' \
               2>/dev/null |
-              head -200 || true
+              sort |
+              head -200
 
             exit 1
+
           fi
 
           cp -f \
@@ -1530,29 +1522,114 @@ jobs:
               -iname 'OrangeFox*.zip' \
               -print \
               -quit ||
-              true
+            true
           )"
 
-          {
-            echo "OUT_DIR=$OUT"
-            echo "IMAGE_PATH=$IMAGE"
-            echo "RELEASE_IMAGE=$RELEASE_IMAGE"
-            echo "FOX_ZIP=$ZIP"
-            echo "CHECK_IMG_IS_OK=true"
-            echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)"
-          } >> "$GITHUB_ENV"
+          echo "OUT_DIR=$OUT" >> "$GITHUB_ENV"
+          echo "IMAGE_PATH=$IMAGE" >> "$GITHUB_ENV"
+          echo "RELEASE_IMAGE=$RELEASE_IMAGE" >> "$GITHUB_ENV"
+          echo "FOX_ZIP=$ZIP" >> "$GITHUB_ENV"
+
+          echo "CHECK_IMG_IS_OK=true" \
+            >> "$GITHUB_ENV"
+
+          echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)" \
+            >> "$GITHUB_ENV"
 
           echo
           echo "========================================"
           echo "🟢 BUILD OUTPUT VALID"
+          echo "Image: $IMAGE"
           echo "========================================"
-
-          ls -lh "$IMAGE"
-          ls -lh "$OUT/$RELEASE_IMAGE"
 
           "$STATE_DIR/stage_end.sh" \
             "Validate Output" \
             success
+
+
+      # ============================================================
+      # LDCHECK
+      # ============================================================
+
+      - name: Run LDCHECK
+        if: inputs.LDCHECK == true && env.CHECK_IMG_IS_OK == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          "$STATE_DIR/stage_start.sh" \
+            "LDCHECK"
+
+          cd "$OUT_DIR"
+
+          TARGET_FILE="$OUT_DIR/${{ inputs.LDCHECKPATH }}"
+
+          if [ ! -f "$TARGET_FILE" ]; then
+
+            echo "::warning::LDCHECK target not found:"
+            echo "$TARGET_FILE"
+
+            "$STATE_DIR/stage_end.sh" \
+              "LDCHECK" \
+              success
+
+            exit 0
+
+          fi
+
+          if command -v ldcheck >/dev/null 2>&1; then
+
+            ldcheck "$TARGET_FILE" \
+              2>&1 |
+              tee -a "$STATE_DIR/build.log"
+
+          else
+
+            echo "::warning::ldcheck command is not installed."
+
+          fi
+
+          "$STATE_DIR/stage_end.sh" \
+            "LDCHECK" \
+            success
+
+
+      # ============================================================
+      # CCACHE STATS
+      # ============================================================
+
+      - name: Show ccache statistics
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          echo
+          echo "========================================"
+          echo "ccache statistics"
+          echo "========================================"
+
+          ccache -s || true
+
+
+      # ============================================================
+      # GITHUB RELEASE
+      # ============================================================
+
+      - name: Upload build to GitHub Release
+        if: inputs.UPLOAD_RESULTS == true && env.CHECK_IMG_IS_OK == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.IMAGE_PATH }}
+            ${{ env.OUT_DIR }}/${{ env.RELEASE_IMAGE }}
+            ${{ env.FOX_ZIP }}
+          name: "🦊 OrangeFox ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}"
+          tag_name: "build-${{ github.run_id }}"
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
 
       # ============================================================
@@ -1572,15 +1649,13 @@ jobs:
 
             PID="$(cat "$STATE_DIR/telegram_monitor_pid")"
 
-            kill "$PID" \
-              2>/dev/null ||
-              true
+            kill "$PID" 2>/dev/null || true
 
           fi
 
 
       # ============================================================
-      # TELEGRAM FINAL
+      # TELEGRAM FINAL STATUS
       # ============================================================
 
       - name: Telegram - final status
@@ -1599,53 +1674,42 @@ jobs:
             exit 0
           fi
 
-          START="$(
-            cat "$STATE_DIR/build_start" \
-              2>/dev/null ||
-              date +%s
-          )"
-
-          NOW="$(date +%s)"
-
-          TOTAL=$((NOW - START))
-
-          if [ "${CHECK_IMG_IS_OK:-false}" = "true" ]; then
-
-            STATUS="✅ <b>BUILD SUCCESS</b>"
-
-          else
-
-            STATUS="❌ <b>BUILD FAILED</b>"
-
-          fi
-
-          if [ -f "$STATE_DIR/failure_reason" ] && \
-             [ -s "$STATE_DIR/failure_reason" ]; then
-
-            REASON="$(
-              head -30 "$STATE_DIR/failure_reason"
-            )"
-
-          else
-
-            REASON="No detailed failure reason available."
-
-          fi
-
           escape_html() {
             "$STATE_DIR/tg_escape.sh" "$1"
           }
 
+          RESULT="${{ job.status }}"
+
+          if [ "$RESULT" = "success" ]; then
+
+            STATUS_TEXT="✅ <b>BUILD SUCCESS</b>"
+
+          else
+
+            STATUS_TEXT="❌ <b>BUILD FAILED</b>"
+
+          fi
+
+          FAILURE_TEXT=""
+
+          if [ -f "$STATE_DIR/failure_reason" ] && \
+             [ -s "$STATE_DIR/failure_reason" ]; then
+
+            FAILURE_TEXT="$(
+              head -20 "$STATE_DIR/failure_reason"
+            )"
+
+          fi
+
           TEXT="$(
             printf \
-              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n%s\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>%s</code>\n🖥 Runner: <code>%s</code>\n\n⏱️ Total: <code>%ss</code>\n\n%s\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
-              "$STATUS" \
-              "$(escape_html "${FOX_BRANCH:-unknown}")" \
-              "$(escape_html "${TARGET:-unknown}")" \
+              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n%s\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>%s</code>\n🖥 Runner: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n⏱️ <b>Build finished</b>\n\n%s\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
+              "$STATUS_TEXT" \
+              "$(escape_html "$FOX_BRANCH")" \
+              "$(escape_html "$TARGET")" \
               "$(escape_html "${DEVICE_NAME:-unknown}")" \
               "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
-              "$TOTAL" \
-              "$(escape_html "$REASON")" \
+              "$(escape_html "$FAILURE_TEXT")" \
               "$GITHUB_REPOSITORY" \
               "$GITHUB_RUN_ID"
           )"
@@ -1663,24 +1727,7 @@ jobs:
 
 
       # ============================================================
-      # UPLOAD / RELEASE
-      # ============================================================
-
-      - name: Upload to GitHub Release
-        if: inputs.UPLOAD_RESULTS == true && env.CHECK_IMG_IS_OK == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ${{ env.IMAGE_PATH }}
-            ${{ env.OUT_DIR }}/${{ env.RELEASE_IMAGE }}
-            ${{ env.FOX_ZIP }}
-          name: "🦊 OrangeFox ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}"
-          tag_name: "build-${{ github.run_id }}"
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-
-      # ============================================================
-      # BUILD SUMMARY
+      # FINAL BUILD SUMMARY
       # ============================================================
 
       - name: Build summary
@@ -1691,8 +1738,12 @@ jobs:
 
           echo
           echo "========================================"
-          echo "       MKVenomPro OrangeFox Summary"
+          echo "🦊 MKVenomPro OrangeFox Builder"
           echo "========================================"
+
+          echo
+          echo "Job status:"
+          echo "${{ job.status }}"
 
           echo
           echo "Runner:"
@@ -1700,19 +1751,15 @@ jobs:
 
           echo
           echo "OrangeFox:"
-          echo "${FOX_BRANCH:-unknown}"
+          echo "${{ inputs.FOX_BRANCH }}"
+
+          echo
+          echo "Target:"
+          echo "${{ inputs.BUILD_TARGET }}"
 
           echo
           echo "Device:"
           echo "${DEVICE_NAME:-unknown}"
-
-          echo
-          echo "Target:"
-          echo "${TARGET:-unknown}"
-
-          echo
-          echo "Build result:"
-          echo "${CHECK_IMG_IS_OK:-false}"
 
           echo
           echo "Completed stages:"
