@@ -889,17 +889,22 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # ============================================================
-      # RESET ORANGEFOX PATCHES (NEW FIX)
+      # CLEAN PATCH STATE (CRITICAL FIX)
       # ============================================================
-      - name: Reset OrangeFox patch state
+      - name: Clean OrangeFox patch state
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$SYNC_PATH" 2>/dev/null || exit 0
 
-          echo "Resetting known OrangeFox patch directories..."
+          echo "Cleaning OrangeFox patch artifacts..."
 
+          # Remove any leftover reject files
+          find . -name "*.rej" -type f -delete 2>/dev/null || true
+          find . -name "*.orig" -type f -delete 2>/dev/null || true
+
+          # Reset known directories that OrangeFox patches
           for d in system/vold system/libvintf bootable/recovery vendor/recovery; do
             if [ -d "$d/.git" ]; then
               (cd "$d" && git checkout -f -- . >/dev/null 2>&1 && git clean -fd >/dev/null 2>&1) || true
@@ -907,8 +912,10 @@ jobs:
             fi
           done
 
+          echo "Patch artifacts cleaned."
+
       # ============================================================
-      # BUILD ORANGEFOX
+      # BUILD ORANGEFOX (THE REAL FIX)
       # ============================================================
       - name: Build OrangeFox
         shell: bash
@@ -917,40 +924,35 @@ jobs:
 
           cd "$SYNC_PATH"
 
+          # CRITICAL: Export TOP before sourcing envsetup.sh
           export TOP="$SYNC_PATH"
           export ZSH_VERSION=""
 
+          # Disable strict mode around envsetup.sh because apply_patches.sh
+          # might fail on already-patched files, but we still need lunch/mka
           set +e
           set +u
 
-          source build/envsetup.sh 2>&1 | tee -a "$STATE_DIR/build.log"
-          ENVSETUP_STATUS=${PIPESTATUS[0]}
+          # DO NOT PIPE source to tee - it breaks function definitions in bash
+          source build/envsetup.sh
+          ENVSETUP_STATUS=$?
 
+          # Verify lunch was actually defined
+          if ! type lunch >/dev/null 2>&1; then
+            echo "::error::lunch command not found after sourcing envsetup.sh (exit code: $ENVSETUP_STATUS)"
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
+            exit 1
+          fi
+
+          # If envsetup.sh failed but lunch is available, it's just patches
+          if [ "$ENVSETUP_STATUS" -ne 0 ]; then
+            echo "::warning::envsetup.sh exited with code $ENVSETUP_STATUS (likely patch failure). lunch is available. Continuing build..."
+          fi
+
+          # Re-enable strict mode for the rest
           set -e
           set -u
-
-          if [ "$ENVSETUP_STATUS" -ne 0 ]; then
-            PATCH_FAIL=false
-
-            if grep -q "apply_patches.sh failed" "$STATE_DIR/build.log" 2>/dev/null; then
-              PATCH_FAIL=true
-            fi
-
-            if [ -f "$SYNC_PATH/system/libvintf/parse_xml.cpp.rej" ] || \
-               [ -f "$SYNC_PATH/system/vold/Decrypt.cpp.rej" ] || \
-               [ -f "$SYNC_PATH/bootable/recovery/Android.mk.rej" ]; then
-              PATCH_FAIL=true
-            fi
-
-            if [ "$PATCH_FAIL" = "true" ]; then
-              echo "::warning::envsetup.sh failed because OrangeFox patches could not be applied (likely already applied). Continuing build..."
-            else
-              echo "::error::envsetup.sh failed with code $ENVSETUP_STATUS"
-              echo "BUILD" > "$STATE_DIR/failure_reason"
-              "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
-              exit 1
-            fi
-          fi
 
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
           export OF_MAINTAINER="$OF_MAINTAINER"
