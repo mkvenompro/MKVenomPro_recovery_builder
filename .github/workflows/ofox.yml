@@ -290,6 +290,26 @@ jobs:
             echo "No existing source tree — nothing to repair."
           fi
 
+      - name: Reset locally patched files (self-hosted reruns)
+        if: inputs.RUNNER_TYPE == 'self-hosted'
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [ -d "$SYNC_PATH/.repo" ]; then
+            echo "Discarding any locally modified/patched files so the sync script's patches can apply cleanly again..."
+            cd "$SYNC_PATH"
+
+            repo forall -c '
+              git checkout -f -- . >/dev/null 2>&1
+              git clean -fd >/dev/null 2>&1
+            ' 2>&1 || echo "::warning::repo forall reset pass finished with warnings — continuing."
+
+            echo "Reset pass complete."
+          else
+            echo "No existing source tree — nothing to reset."
+          fi
+
       - name: Sync OrangeFox sources
         shell: bash
         run: |
