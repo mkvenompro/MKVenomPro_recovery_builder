@@ -491,10 +491,23 @@ jobs:
             exit 1
           fi
 
+          # NOTE: this server's /tmp is tmpfs mounted with a broken
+          # 'usrquota' option the kernel doesn't actually support
+          # (see: dmesg -> "tmpfs: Unexpected value for 'usrquota'").
+          # Under heavy parallel compiles this makes writes into /tmp
+          # intermittently fail with a Read-only-file-system error.
+          # ccache and the compiler both fall back to $TMPDIR (default
+          # /tmp) for scratch files, so force them onto a normal disk
+          # path instead of touching /tmp at all.
+          SAFE_TMPDIR="${RUNNER_TEMP}/mkvenompro-tmp"
+          mkdir -p "$SAFE_TMPDIR"
+
           {
             echo "CCACHE_DIR=$CCACHE_SELECTED"
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_NOHASHDIR=true"
+            echo "CCACHE_TEMPDIR=$SAFE_TMPDIR"
+            echo "TMPDIR=$SAFE_TMPDIR"
           } >> "$GITHUB_ENV"
 
           mkdir -p "$CCACHE_SELECTED"
@@ -505,6 +518,8 @@ jobs:
           echo
           echo "Selected ccache:"
           echo "$CCACHE_SELECTED"
+          echo "Safe TMPDIR (avoiding broken /tmp usrquota):"
+          echo "$SAFE_TMPDIR"
 
           ccache -s || true
 
@@ -840,6 +855,8 @@ jobs:
 
           export TOP="$SYNC_PATH"
           export ZSH_VERSION=""
+          export TMPDIR="${TMPDIR:-${RUNNER_TEMP}/mkvenompro-tmp}"
+          mkdir -p "$TMPDIR"
 
           source build/envsetup.sh
           ENVSETUP_STATUS=$?
