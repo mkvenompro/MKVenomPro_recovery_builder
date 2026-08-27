@@ -172,11 +172,19 @@ jobs:
             unzip \
             rsync
 
-          git clone --depth=1 \
-            https://gitlab.com/OrangeFox/misc/scripts \
-            "$HOME/ofox-scripts"
+          if [ -d "$HOME/ofox-scripts/.git" ]; then
+            echo "ofox-scripts already present — updating."
+            cd "$HOME/ofox-scripts"
+            git fetch --depth=1 origin
+            git reset --hard origin/HEAD
+          else
+            rm -rf "$HOME/ofox-scripts"
+            git clone --depth=1 \
+              https://gitlab.com/OrangeFox/misc/scripts \
+              "$HOME/ofox-scripts"
+            cd "$HOME/ofox-scripts"
+          fi
 
-          cd "$HOME/ofox-scripts"
           sudo bash setup/android_build_env.sh
 
       - name: Restore ccache
@@ -249,8 +257,16 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/OrangeFox"
           cd "${GITHUB_WORKSPACE}/OrangeFox"
 
-          git clone --depth=1 \
-            https://gitlab.com/OrangeFox/sync.git
+          if [ -d "sync/.git" ]; then
+            echo "OrangeFox/sync already present — updating."
+            cd sync
+            git fetch --depth=1 origin
+            git reset --hard origin/HEAD
+          else
+            rm -rf sync
+            git clone --depth=1 \
+              https://gitlab.com/OrangeFox/sync.git
+          fi
 
       - name: Sync OrangeFox sources
         shell: bash
