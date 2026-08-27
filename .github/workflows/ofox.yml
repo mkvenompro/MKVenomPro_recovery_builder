@@ -78,6 +78,19 @@ on:
         default: "self-hosted"
         type: string
 
+      CCACHE_SIZE:
+        description: "ccache max size"
+        required: true
+        type: choice
+        default: "50G"
+        options:
+          - "20G"
+          - "50G"
+          - "80G"
+          - "100G"
+          - "150G"
+          - "200G"
+
 jobs:
   build:
     name: "🦊 fox_${{ inputs.FOX_BRANCH }}"
@@ -106,6 +119,7 @@ jobs:
           echo "Device tree  : ${{ inputs.DT_REPO_URL }}"
           echo "Tree branch  : ${{ inputs.DT_BRANCH }}"
           echo "Magisk       : ${{ inputs.USE_LATEST_MAGISK }}"
+          echo "ccache size  : ${{ inputs.CCACHE_SIZE }}"
           echo "Upload       : ${{ inputs.UPLOAD_RESULTS }}"
           echo "LDCheck      : ${{ inputs.LDCHECK }}"
           echo "Maintainer   : ${{ github.actor }}"
@@ -126,7 +140,7 @@ jobs:
             echo "SYNC_BRANCH=$SYNC_BRANCH"
             echo "BRANCH_INT=$BRANCH_INT"
             echo "SYNC_PATH=$SYNC_PATH"
-            echo "CCACHE_DIR=/tmp/ccache"
+            echo "CCACHE_DIR=/root/.ccache"
           } >> "$GITHUB_ENV"
 
       - name: Clean up runner disk space
@@ -168,7 +182,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache@v4
         with:
-          path: /tmp/ccache
+          path: /root/.ccache
           key: ccache-${{ inputs.DT_REPO_URL }}-${{ inputs.FOX_BRANCH }}-${{ github.run_id }}
           restore-keys: |
             ccache-${{ inputs.DT_REPO_URL }}-${{ inputs.FOX_BRANCH }}-
@@ -178,8 +192,8 @@ jobs:
         shell: bash
         run: |
           set -e
-          mkdir -p /tmp/ccache
-          ccache -M 50G
+          mkdir -p /root/.ccache
+          ccache -M ${{ inputs.CCACHE_SIZE }}
           ccache -z
           ccache -s
 
