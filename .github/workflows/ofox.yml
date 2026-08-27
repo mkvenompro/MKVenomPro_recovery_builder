@@ -1,400 +1,1213 @@
 name: 🦊 OrangeFox Builder
 
 on:
-  workflow_dispatch:
-    inputs:
-      FOX_BRANCH:
-        description: "OrangeFox Manifest Branch"
-        required: true
-        type: choice
-        default: "12.1"
-        options:
-          - "16.0"
-          - "14.1"
-          - "12.1"
-          - "11.0"
-          - "10.0"
-          - "9.0"
-          - "8.1"
-          - "7.1"
-          - "6.0"
+ workflow_dispatch:
+   inputs:
+     FOX_BRANCH:
+       description: "OrangeFox Manifest Branch"
+       required: true
+       type: choice
+       default: "12.1"
+       options:
+         - "16.0"
+         - "14.1"
+         - "12.1"
+         - "11.0"
+         - "10.0"
+         - "9.0"
+         - "8.1"
+         - "7.1"
+         - "6.0"
 
-      DT_REPO_URL:
-        description: "Custom Recovery Tree (public or private)"
-        required: true
-        type: string
+     DT_REPO_URL:
+       description: "Custom Recovery Tree (public or private)"
+       required: true
+       type: string
 
-      DT_BRANCH:
-        description: "Custom Recovery Tree Branch"
-        required: true
-        default: "android-12.1"
-        type: string
+     DT_BRANCH:
+       description: "Custom Recovery Tree Branch"
+       required: true
+       default: "android-12.1"
+       type: string
 
-      BUILD_TARGET:
-        description: "Build Target"
-        required: true
-        type: choice
-        default: "vendorbootimage"
-        options:
-          - "vendorbootimage"
-          - "recoveryimage"
-          - "bootimage"
+     BUILD_TARGET:
+       description: "Build Target"
+       required: true
+       type: choice
+       default: "vendorbootimage"
+       options:
+         - "vendorbootimage"
+         - "recoveryimage"
+         - "bootimage"
 
-      USE_LATEST_MAGISK:
-        description: "Bundle latest Magisk zip?"
-        required: true
-        type: boolean
-        default: true
+     USE_LATEST_MAGISK:
+       description: "Bundle latest Magisk zip?"
+       required: true
+       type: boolean
+       default: true
 
-      UPLOAD_RESULTS:
-        description: "Upload result to GitHub Release?"
-        required: true
-        type: boolean
-        default: true
+     UPLOAD_RESULTS:
+       description: "Upload result to GitHub Release?"
+       required: true
+       type: boolean
+       default: true
 
-      LDCHECK:
-        description: "Run LDCHECK"
-        required: false
-        type: boolean
-        default: false
+     LDCHECK:
+       description: "Run LDCHECK"
+       required: false
+       type: boolean
+       default: false
 
-      LDCHECKPATH:
-        description: "Blob path for LDCHECK"
-        required: false
-        default: "system/bin/qseecomd"
-        type: string
+     LDCHECKPATH:
+       description: "Blob path for LDCHECK"
+       required: false
+       default: "system/bin/qseecomd"
+       type: string
 
-      RUNNER_TYPE:
-        description: "Runner"
-        required: true
-        type: choice
-        default: "github"
-        options:
-          - "github"
-          - "self-hosted"
+     RUNNER_TYPE:
+       description: "Runner"
+       required: true
+       type: choice
+       default: "github"
+       options:
+         - "github"
+         - "self-hosted"
 
-      SELF_HOSTED_LABEL:
-        description: "Self-hosted runner label"
-        required: false
-        default: "self-hosted"
-        type: string
+     SELF_HOSTED_LABEL:
+       description: "Self-hosted runner label"
+       required: false
+       default: "self-hosted"
+       type: string
 
-      CCACHE_SIZE:
-        description: "ccache max size"
-        required: true
-        type: choice
-        default: "50G"
-        options:
-          - "20G"
-          - "50G"
-          - "80G"
-          - "100G"
-          - "150G"
-          - "200G"
+     CCACHE_SIZE:
+       description: "ccache max size"
+       required: true
+       type: choice
+       default: "50G"
+       options:
+         - "20G"
+         - "50G"
+         - "80G"
+         - "100G"
+         - "150G"
+         - "200G"
 
-      REPO_SYNC_JOBS:
-        description: "repo sync jobs"
-        required: true
-        type: choice
-        default: "2"
-        options:
-          - "1"
-          - "2"
-          - "3"
-          - "4"
+     REPO_SYNC_JOBS:
+       description: "repo sync jobs"
+       required: true
+       type: choice
+       default: "2"
+       options:
+         - "1"
+         - "2"
+         - "3"
+         - "4"
 
 jobs:
-  build:
-    name: "🦊 fox_${{ inputs.FOX_BRANCH }}"
+ build:
+   name: "🦊 fox_${{ inputs.FOX_BRANCH }}"
 
-    runs-on: ${{ inputs.RUNNER_TYPE == 'self-hosted' && inputs.SELF_HOSTED_LABEL || 'ubuntu-22.04' }}
+   runs-on: ${{ inputs.RUNNER_TYPE == 'self-hosted' && inputs.SELF_HOSTED_LABEL || 'ubuntu-22.04' }}
 
-    timeout-minutes: 720
+   timeout-minutes: 720
 
-    permissions:
-      contents: write
+   permissions:
+     contents: write
 
-    env:
-      GT_TOKEN: ${{ secrets.GT_TOKEN }}
-      TG_TOKEN: ${{ secrets.TG_TOKEN }}
-      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      OF_MAINTAINER: ${{ github.actor }}
-      TARGET: ${{ inputs.BUILD_TARGET }}
-      REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
-      JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
-      DEBIAN_FRONTEND: noninteractive
+   env:
+     GT_TOKEN: ${{ secrets.GT_TOKEN }}
+     TG_TOKEN: ${{ secrets.TG_TOKEN }}
+     TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+     OF_MAINTAINER: ${{ github.actor }}
+     TARGET: ${{ inputs.BUILD_TARGET }}
+     REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
+     JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
+     DEBIAN_FRONTEND: noninteractive
 
-    steps:
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
-      - name: Checkout builder repository
-        uses: actions/checkout@v4
+   steps:
+     # ============================================================
+     # CHECKOUT
+     # ============================================================
+     - name: Checkout builder repository
+       uses: actions/checkout@v4
 
-      # ============================================================
-      # INITIALIZE STATE + ALL HELPERS
-      # ============================================================
-      - name: Initialize build state and helpers
-        shell: bash
-        run: |
-          set -euo pipefail
+     # ============================================================
+     # INITIALIZE STATE + ALL HELPERS
+     # ============================================================
+     - name: Initialize build state and helpers
+       shell: bash
+       run: |
+         set -euo pipefail
 
-          STATE_DIR="${RUNNER_TEMP}/mkvenompro-build-state"
-          mkdir -p "$STATE_DIR"
+         STATE_DIR="${RUNNER_TEMP}/mkvenompro-build-state"
+         mkdir -p "$STATE_DIR"
 
-          echo "STATE_DIR=$STATE_DIR" >> "$GITHUB_ENV"
+         echo "STATE_DIR=$STATE_DIR" >> "$GITHUB_ENV"
 
-          date +%s > "$STATE_DIR/build_start"
-          : > "$STATE_DIR/completed_stages"
-          : > "$STATE_DIR/failure_reason"
-          : > "$STATE_DIR/build.log"
+         date +%s > "$STATE_DIR/build_start"
+         : > "$STATE_DIR/completed_stages"
+         : > "$STATE_DIR/failure_reason"
+         : > "$STATE_DIR/build.log"
 
-          echo "Initializing" > "$STATE_DIR/current_stage"
-          date +%s > "$STATE_DIR/current_stage_start"
+         echo "Initializing" > "$STATE_DIR/current_stage"
+         date +%s > "$STATE_DIR/current_stage_start"
 
-          echo "FAILED_STAGE=" >> "$GITHUB_ENV"
-          echo "FAILURE_CLASS=" >> "$GITHUB_ENV"
-          echo "BUILD_FAILED_REASON=" >> "$GITHUB_ENV"
+         echo "FAILED_STAGE=" >> "$GITHUB_ENV"
+         echo "FAILURE_CLASS=" >> "$GITHUB_ENV"
+         echo "BUILD_FAILED_REASON=" >> "$GITHUB_ENV"
 
-          cat > "$STATE_DIR/stage_start.sh" <<'STAGESTART'
-          #!/usr/bin/env bash
-          set +u
-          STAGE="${1:-Unknown}"
-          NOW="$(date +%s)"
-          echo "$STAGE" > "$STATE_DIR/current_stage"
-          echo "$NOW" > "$STATE_DIR/current_stage_start"
-          echo
-          echo "========================================"
-          echo "🔵 STAGE: $STAGE"
-          echo "🕐 Started: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "========================================"
-          STAGESTART
+         cat > "$STATE_DIR/stage_start.sh" <<'STAGESTART'
+         #!/usr/bin/env bash
+         set +u
+         STAGE="${1:-Unknown}"
+         NOW="$(date +%s)"
+         echo "$STAGE" > "$STATE_DIR/current_stage"
+         echo "$NOW" > "$STATE_DIR/current_stage_start"
+         echo
+         echo "========================================"
+         echo "🔵 STAGE: $STAGE"
+         echo "🕐 Started: $(date '+%Y-%m-%d %H:%M:%S')"
+         echo "========================================"
+         STAGESTART
 
-          cat > "$STATE_DIR/stage_end.sh" <<'STAGEEND'
-          #!/usr/bin/env bash
-          set +u
-          STAGE="${1:-Unknown}"
-          STATUS="${2:-success}"
-          NOW="$(date +%s)"
-          START="$(
-            cat "$STATE_DIR/current_stage_start" 2>/dev/null ||
-            echo "$NOW"
-          )"
-          ELAPSED=$((NOW - START))
-          echo "${STAGE}|${STATUS}|${ELAPSED}" >> "$STATE_DIR/completed_stages"
-          if [ "$STATUS" = "success" ]; then
-            echo "🟢 STAGE COMPLETE: $STAGE"
-            echo "⏱️ Duration: ${ELAPSED}s"
-          else
-            echo "🔴 STAGE FAILED: $STAGE"
-            echo "⏱️ Duration: ${ELAPSED}s"
-          fi
-          STAGEEND
+         cat > "$STATE_DIR/stage_end.sh" <<'STAGEEND'
+         #!/usr/bin/env bash
+         set +u
+         STAGE="${1:-Unknown}"
+         STATUS="${2:-success}"
+         NOW="$(date +%s)"
+         START="$(
+           cat "$STATE_DIR/current_stage_start" 2>/dev/null ||
+           echo "$NOW"
+         )"
+         ELAPSED=$((NOW - START))
+         echo "${STAGE}|${STATUS}|${ELAPSED}" >> "$STATE_DIR/completed_stages"
+         if [ "$STATUS" = "success" ]; then
+           echo "🟢 STAGE COMPLETE: $STAGE"
+           echo "⏱️ Duration: ${ELAPSED}s"
+         else
+           echo "🔴 STAGE FAILED: $STAGE"
+           echo "⏱️ Duration: ${ELAPSED}s"
+         fi
+         STAGEEND
 
-          cat > "$STATE_DIR/tg_escape.sh" <<'TGESCAPE'
-          #!/usr/bin/env bash
-          printf '%s' "${1:-}" |
-            sed \
-              -e 's/&/\&amp;/g' \
-              -e 's/</\&lt;/g' \
-              -e 's/>/\&gt;/g'
-          TGESCAPE
+         cat > "$STATE_DIR/tg_escape.sh" <<'TGESCAPE'
+         #!/usr/bin/env bash
+         printf '%s' "${1:-}" |
+           sed \
+             -e 's/&/\&amp;/g' \
+             -e 's/</\&lt;/g' \
+             -e 's/>/\&gt;/g'
+         TGESCAPE
 
-          chmod +x \
-            "$STATE_DIR/stage_start.sh" \
-            "$STATE_DIR/stage_end.sh" \
-            "$STATE_DIR/tg_escape.sh"
+         chmod +x \
+           "$STATE_DIR/stage_start.sh" \
+           "$STATE_DIR/stage_end.sh" \
+           "$STATE_DIR/tg_escape.sh"
 
-          test -x "$STATE_DIR/stage_start.sh"
-          test -x "$STATE_DIR/stage_end.sh"
-          test -x "$STATE_DIR/tg_escape.sh"
+         test -x "$STATE_DIR/stage_start.sh"
+         test -x "$STATE_DIR/stage_end.sh"
+         test -x "$STATE_DIR/tg_escape.sh"
 
-          echo
-          echo "========================================"
-          echo "🟢 BUILD STATE INITIALIZED"
-          echo "STATE_DIR: $STATE_DIR"
-          echo "========================================"
+         echo
+         echo "========================================"
+         echo "🟢 BUILD STATE INITIALIZED"
+         echo "STATE_DIR: $STATE_DIR"
+         echo "========================================"
 
-      # ============================================================
-      # DISPLAY INPUTS
-      # ============================================================
-      - name: Display inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "========================================"
-          echo "       MKVenomPro OrangeFox CI"
-          echo "========================================"
-          echo "OrangeFox       : ${{ inputs.FOX_BRANCH }}"
-          echo "Target          : ${{ inputs.BUILD_TARGET }}"
-          echo "Device tree     : ${{ inputs.DT_REPO_URL }}"
-          echo "Tree branch     : ${{ inputs.DT_BRANCH }}"
-          echo "Magisk          : ${{ inputs.USE_LATEST_MAGISK }}"
-          echo "ccache size     : ${{ inputs.CCACHE_SIZE }}"
-          echo "Upload          : ${{ inputs.UPLOAD_RESULTS }}"
-          echo "LDCheck         : ${{ inputs.LDCHECK }}"
-          echo "LDCheck path    : ${{ inputs.LDCHECKPATH }}"
-          echo "Runner          : ${{ inputs.RUNNER_TYPE }}"
-          echo "Self-host label : ${{ inputs.SELF_HOSTED_LABEL }}"
-          echo "Sync jobs       : ${{ inputs.REPO_SYNC_JOBS }}"
-          echo "Maintainer      : ${{ github.actor }}"
-          echo "========================================"
+     # ============================================================
+     # DISPLAY INPUTS
+     # ============================================================
+     - name: Display inputs
+       shell: bash
+       run: |
+         set -euo pipefail
+         echo "========================================"
+         echo "       MKVenomPro OrangeFox CI"
+         echo "========================================"
+         echo "OrangeFox       : ${{ inputs.FOX_BRANCH }}"
+         echo "Target          : ${{ inputs.BUILD_TARGET }}"
+         echo "Device tree     : ${{ inputs.DT_REPO_URL }}"
+         echo "Tree branch     : ${{ inputs.DT_BRANCH }}"
+         echo "Magisk          : ${{ inputs.USE_LATEST_MAGISK }}"
+         echo "ccache size     : ${{ inputs.CCACHE_SIZE }}"
+         echo "Upload          : ${{ inputs.UPLOAD_RESULTS }}"
+         echo "LDCheck         : ${{ inputs.LDCHECK }}"
+         echo "LDCheck path    : ${{ inputs.LDCHECKPATH }}"
+         echo "Runner          : ${{ inputs.RUNNER_TYPE }}"
+         echo "Self-host label : ${{ inputs.SELF_HOSTED_LABEL }}"
+         echo "Sync jobs       : ${{ inputs.REPO_SYNC_JOBS }}"
+         echo "Maintainer      : ${{ github.actor }}"
+         echo "========================================"
 
-      # ============================================================
-      # PARSE INPUTS
-      # ============================================================
-      - name: Parse inputs
-        shell: bash
-        run: |
-          set -euo pipefail
+     # ============================================================
+     # PARSE INPUTS
+     # ============================================================
+     - name: Parse inputs
+       shell: bash
+       run: |
+         set -euo pipefail
 
-          SYNC_BRANCH="${{ inputs.FOX_BRANCH }}"
-          FOX_BRANCH="fox_${SYNC_BRANCH}"
-          BRANCH_INT="${SYNC_BRANCH%%.*}"
-          SYNC_PATH="${GITHUB_WORKSPACE}/OrangeFox/${FOX_BRANCH}"
+         SYNC_BRANCH="${{ inputs.FOX_BRANCH }}"
+         FOX_BRANCH="fox_${SYNC_BRANCH}"
+         BRANCH_INT="${SYNC_BRANCH%%.*}"
+         SYNC_PATH="${GITHUB_WORKSPACE}/OrangeFox/${FOX_BRANCH}"
 
-          {
-            echo "FOX_BRANCH=$FOX_BRANCH"
-            echo "SYNC_BRANCH=$SYNC_BRANCH"
-            echo "BRANCH_INT=$BRANCH_INT"
-            echo "SYNC_PATH=$SYNC_PATH"
-          } >> "$GITHUB_ENV"
+         {
+           echo "FOX_BRANCH=$FOX_BRANCH"
+           echo "SYNC_BRANCH=$SYNC_BRANCH"
+           echo "BRANCH_INT=$BRANCH_INT"
+           echo "SYNC_PATH=$SYNC_PATH"
+         } >> "$GITHUB_ENV"
 
-          echo "FOX_BRANCH=$FOX_BRANCH"
-          echo "SYNC_PATH=$SYNC_PATH"
+         echo "FOX_BRANCH=$FOX_BRANCH"
+         echo "SYNC_PATH=$SYNC_PATH"
 
-      # ============================================================
-      # VALIDATE RUNNER
-      # ============================================================
-      - name: Validate runner
-        shell: bash
-        run: |
-          set -euo pipefail
+     # ============================================================
+     # VALIDATE RUNNER
+     # ============================================================
+     - name: Validate runner
+       shell: bash
+       run: |
+         set -euo pipefail
 
-          "$STATE_DIR/stage_start.sh" "Validate runner"
+         "$STATE_DIR/stage_start.sh" "Validate runner"
 
-          echo "Hostname:"
-          hostname || true
-          echo
-          echo "CPU:"
-          nproc || true
-          echo
-          echo "Memory:"
-          free -h || true
-          echo
-          echo "Disk:"
-          df -h / || true
-          echo
-          echo "Workspace:"
-          df -h "$GITHUB_WORKSPACE" || true
-          echo
-          echo "Runner: ${{ inputs.RUNNER_TYPE }}"
-          echo "Sync jobs: $REPO_SYNC_JOBS"
+         echo "Hostname:"
+         hostname || true
+         echo
+         echo "CPU:"
+         nproc || true
+         echo
+         echo "Memory:"
+         free -h || true
+         echo
+         echo "Disk:"
+         df -h / || true
+         echo
+         echo "Workspace:"
+         df -h "$GITHUB_WORKSPACE" || true
+         echo
+         echo "Runner: ${{ inputs.RUNNER_TYPE }}"
+         echo "Sync jobs: $REPO_SYNC_JOBS"
 
-          if ! [[ "$REPO_SYNC_JOBS" =~ ^[1-4]$ ]]; then
-            echo "::error::REPO_SYNC_JOBS must be 1-4."
-            "$STATE_DIR/stage_end.sh" "Validate runner" failure
-            exit 1
-          fi
+         if ! [[ "$REPO_SYNC_JOBS" =~ ^[1-4]$ ]]; then
+           echo "::error::REPO_SYNC_JOBS must be 1-4."
+           "$STATE_DIR/stage_end.sh" "Validate runner" failure
+           exit 1
+         fi
 
-          "$STATE_DIR/stage_end.sh" "Validate runner" success
+         "$STATE_DIR/stage_end.sh" "Validate runner" success
 
-      # ============================================================
-      # GITHUB HOSTED CLEANUP ONLY
-      # ============================================================
-      - name: Clean GitHub-hosted runner
-        if: inputs.RUNNER_TYPE != 'self-hosted'
-        uses: rokibhasansagar/slimhub_actions@main
+     # ============================================================
+     # GITHUB HOSTED CLEANUP ONLY
+     # ============================================================
+     - name: Clean GitHub-hosted runner
+       if: inputs.RUNNER_TYPE != 'self-hosted'
+       uses: rokibhasansagar/slimhub_actions@main
 
-      # ============================================================
-      # SWAP - GITHUB HOSTED ONLY
-      # ============================================================
-      - name: Add swap space
-        if: inputs.RUNNER_TYPE != 'self-hosted'
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 12
+     # ============================================================
+     # SWAP - GITHUB HOSTED ONLY
+     # ============================================================
+     - name: Add swap space
+       if: inputs.RUNNER_TYPE != 'self-hosted'
+       uses: pierotofy/set-swap-space@master
+       with:
+         swap-size-gb: 12
 
-      # ============================================================
-      # TELEGRAM START
-      # ============================================================
-      - name: Telegram - build started
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
+     # ============================================================
+     # TELEGRAM START
+     # ============================================================
+     - name: Telegram - build started
+       if: always()
+       continue-on-error: true
+       shell: bash
+       run: |
+         set +e
 
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            echo "Telegram disabled."
-            exit 0
-          fi
+         if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+           echo "Telegram disabled."
+           exit 0
+         fi
 
-          if [ ! -x "$STATE_DIR/tg_escape.sh" ]; then
-            echo "Telegram helper missing."
-            exit 0
-          fi
+         if [ ! -x "$STATE_DIR/tg_escape.sh" ]; then
+           echo "Telegram helper missing."
+           exit 0
+         fi
 
-          escape_html() {
-            "$STATE_DIR/tg_escape.sh" "$1"
-          }
+         escape_html() {
+           "$STATE_DIR/tg_escape.sh" "$1"
+         }
 
-          TEXT="$(
-            printf \
-              '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
-              "$(escape_html "$FOX_BRANCH")" \
-              "$(escape_html "$TARGET")" \
-              "$(escape_html "${{ inputs.DT_REPO_URL }}")" \
-              "$(escape_html "${{ inputs.DT_BRANCH }}")" \
-              "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
-              "$(escape_html "$REPO_SYNC_JOBS")" \
-              "$(escape_html "$OF_MAINTAINER")" \
-              "$GITHUB_REPOSITORY" \
-              "$GITHUB_RUN_ID"
-          )"
+         TEXT="$(
+           printf \
+             '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🌲 Tree: <code>%s</code>\n🌿 Tree branch: <code>%s</code>\n🖥 Runner: <code>%s</code>\n⚙️ Sync jobs: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n🔵 <b>Current stage:</b> Initializing\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
+             "$(escape_html "$FOX_BRANCH")" \
+             "$(escape_html "$TARGET")" \
+             "$(escape_html "${{ inputs.DT_REPO_URL }}")" \
+             "$(escape_html "${{ inputs.DT_BRANCH }}")" \
+             "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
+             "$(escape_html "$REPO_SYNC_JOBS")" \
+             "$(escape_html "$OF_MAINTAINER")" \
+             "$GITHUB_REPOSITORY" \
+             "$GITHUB_RUN_ID"
+         )"
 
-          RESPONSE="$(
-            curl -sS \
-              --connect-timeout 10 \
-              --max-time 30 \
-              -X POST \
-              "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-              -d "chat_id=${TG_CHAT_ID}" \
-              --data-urlencode "parse_mode=HTML" \
-              --data-urlencode "text=${TEXT}" \
-              2>&1
-          )"
+         RESPONSE="$(
+           curl -sS \
+             --connect-timeout 10 \
+             --max-time 30 \
+             -X POST \
+             "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+             -d "chat_id=${TG_CHAT_ID}" \
+             --data-urlencode "parse_mode=HTML" \
+             --data-urlencode "text=${TEXT}" \
+             2>&1
+         )"
 
-          MESSAGE_ID="$(
-            echo "$RESPONSE" |
-              jq -r '.result.message_id // empty' \
-              2>/dev/null
-          )"
+         MESSAGE_ID="$(
+           echo "$RESPONSE" |
+             jq -r '.result.message_id // empty' \
+             2>/dev/null
+         )"
 
-          if [ -n "$MESSAGE_ID" ]; then
-            echo "$MESSAGE_ID" > "$STATE_DIR/telegram_message_id"
-            echo "Telegram start notification sent."
-          else
-            echo "::warning::Telegram notification failed."
-            echo "$RESPONSE"
-          fi
+         if [ -n "$MESSAGE_ID" ]; then
+           echo "$MESSAGE_ID" > "$STATE_DIR/telegram_message_id"
+           echo "Telegram start notification sent."
+         else
+           echo "::warning::Telegram notification failed."
+           echo "$RESPONSE"
+         fi
 
-      # ============================================================
-      # TELEGRAM LIVE MONITOR
-      # ============================================================
-      - name: Start Telegram live monitor
-        if: always()
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
+     # ============================================================
+     # TELEGRAM LIVE MONITOR
+     # ============================================================
+     - name: Start Telegram live monitor
+       if: always()
+       continue-on-error: true
+       shell: bash
+       run: |
+         set +e
 
-          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
-            exit 0
-          fi
+         if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+           exit 0
+         fi
 
-          if [ ! -f "$STATE_DIR/telegram_message_id" ]; then
-            exit 0
-          fi
+         if [ ! -f "$STATE_DIR/telegram_message_id" ]; then
+           exit 0
+         fi
 
-         
+         (
+           while true; do
+             sleep 20
+
+             if [ -f "$STATE_DIR/stop_monitor" ]; then
+               break
+             fi
+
+             START="$(
+               cat "$STATE_DIR/build_start" \
+                 2>/dev/null ||
+                 date +%s
+             )"
+
+             NOW="$(date +%s)"
+             TOTAL=$((NOW - START))
+
+             STAGE="$(
+               cat "$STATE_DIR/current_stage" \
+                 2>/dev/null ||
+                 echo "Initializing"
+             )"
+
+             STAGE_START="$(
+               cat "$STATE_DIR/current_stage_start" \
+                 2>/dev/null ||
+                 echo "$NOW"
+             )"
+
+             STAGE_TIME=$((NOW - STAGE_START))
+
+             format_time() {
+               local S="${1:-0}"
+
+               if [ "$S" -lt 60 ]; then
+                 printf "%02ds" "$S"
+               elif [ "$S" -lt 3600 ]; then
+                 printf "%02dm %02ds" \
+                   "$((S / 60))" \
+                   "$((S % 60))"
+               else
+                 printf "%02dh %02dm %02ds" \
+                   "$((S / 3600))" \
+                   "$(((S % 3600) / 60))" \
+                   "$((S % 60))"
+               fi
+             }
+
+             escape_html() {
+               "$STATE_DIR/tg_escape.sh" "$1"
+             }
+
+             TEXT="$(
+               printf \
+                 '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🔵 <b>BUILDING</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n📱 Device: <code>%s</code>\n🖥 Runner: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔵 <b>CURRENT STAGE</b>\n🏗️ <b>%s</b>\n⏱️ Stage: <code>%s</code>\n⏱️ Total: <code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔗 <a href="https://github.com/%s/actions/runs/%s">Build logs</a>' \
+                 "$(escape_html "$FOX_BRANCH")" \
+                 "$(escape_html "$TARGET")" \
+                 "$(escape_html "${DEVICE_NAME:-detecting...}")" \
+                 "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
+                 "$(escape_html "$STAGE")" \
+                 "$(format_time "$STAGE_TIME")" \
+                 "$(format_time "$TOTAL")" \
+                 "$GITHUB_REPOSITORY" \
+                 "$GITHUB_RUN_ID"
+             )"
+
+             curl -sS \
+               --connect-timeout 5 \
+               --max-time 15 \
+               -X POST \
+               "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
+               -d "chat_id=${TG_CHAT_ID}" \
+               -d "message_id=$(cat "$STATE_DIR/telegram_message_id")" \
+               --data-urlencode "parse_mode=HTML" \
+               --data-urlencode "text=${TEXT}" \
+               >/dev/null 2>&1 || true
+
+           done
+         ) &
+
+         echo $! > "$STATE_DIR/telegram_monitor_pid"
+
+     # ============================================================
+     # BUILD ENVIRONMENT
+     # ============================================================
+     - name: Install build environment
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Prepare environment"
+
+         sudo apt-get update -qq 2>&1 | tee -a "$STATE_DIR/build.log"
+
+         sudo apt-get install -y \
+           aria2 \
+           jq \
+           curl \
+           wget \
+           git \
+           ccache \
+           patchelf \
+           cpio \
+           lz4 \
+           unzip \
+           rsync \
+           bc \
+           bison \
+           flex \
+           gperf \
+           build-essential \
+           zip \
+           python3 \
+           python3-pip \
+           libssl-dev \
+           libelf-dev \
+           libxml2-utils \
+           xsltproc \
+           2>&1 | tee -a "$STATE_DIR/build.log"
+
+         if [ -d "$HOME/ofox-scripts/.git" ]; then
+           cd "$HOME/ofox-scripts"
+           git fetch --depth=1 origin 2>&1 | tee -a "$STATE_DIR/build.log" || true
+           git reset --hard origin/HEAD 2>&1 | tee -a "$STATE_DIR/build.log" || true
+         else
+           rm -rf "$HOME/ofox-scripts"
+           git clone \
+             --depth=1 \
+             https://gitlab.com/OrangeFox/misc/scripts \
+             "$HOME/ofox-scripts" 2>&1 | tee -a "$STATE_DIR/build.log"
+         fi
+
+         cd "$HOME/ofox-scripts"
+         sudo bash setup/android_build_env.sh 2>&1 | tee -a "$STATE_DIR/build.log"
+
+         "$STATE_DIR/stage_end.sh" "Prepare environment" success
+
+     # ============================================================
+     # CCACHE
+     # ============================================================
+     - name: Configure ccache
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Configure ccache"
+
+         CANDIDATES=(
+           "${RUNNER_TEMP}/mkvenompro-ccache"
+           "${GITHUB_WORKSPACE}/.ccache"
+           "${HOME}/.cache/ccache"
+           "${HOME}/.ccache"
+         )
+
+         CCACHE_SELECTED=""
+
+         for DIR in "${CANDIDATES[@]}"; do
+           mkdir -p "$DIR" 2>/dev/null || continue
+
+           TEST="$DIR/.write-test"
+
+           if touch "$TEST" 2>/dev/null; then
+             rm -f "$TEST"
+             CCACHE_SELECTED="$DIR"
+             break
+           fi
+         done
+
+         if [ -z "$CCACHE_SELECTED" ]; then
+           echo "::error::No writable ccache directory."
+           echo "CCACHE" > "$STATE_DIR/failure_reason"
+           "$STATE_DIR/stage_end.sh" "Configure ccache" failure
+           exit 1
+         fi
+
+         {
+           echo "CCACHE_DIR=$CCACHE_SELECTED"
+           echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+           echo "CCACHE_NOHASHDIR=true"
+         } >> "$GITHUB_ENV"
+
+         mkdir -p "$CCACHE_SELECTED"
+
+         ccache -M "${{ inputs.CCACHE_SIZE }}"
+         ccache -z
+
+         echo
+         echo "Selected ccache:"
+         echo "$CCACHE_SELECTED"
+
+         ccache -s || true
+
+         "$STATE_DIR/stage_end.sh" "Configure ccache" success
+
+     # ============================================================
+     # CCACHE RESTORE
+     # ============================================================
+     - name: Restore ccache
+       uses: actions/cache@v4
+       with:
+         path: ${{ env.CCACHE_DIR }}
+         key: ccache-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-${{ hashFiles('**/BoardConfig.mk') }}
+         restore-keys: |
+           ccache-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
+           ccache-${{ runner.os }}-
+
+     # ============================================================
+     # GIT AUTHENTICATION
+     # ============================================================
+     - name: Configure git authentication
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Configure git"
+
+         git config --global user.name "${{ github.actor }}"
+         git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+         git config --global color.ui false
+
+         git config --global http.version HTTP/1.1
+         git config --global http.postBuffer 524288000
+         git config --global http.maxRequestBuffer 100M
+         git config --global fetch.parallel 4
+
+         if [ -n "${GT_TOKEN:-}" ]; then
+           git config --global \
+             url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf \
+             "https://github.com/"
+         fi
+
+         "$STATE_DIR/stage_end.sh" "Configure git" success
+
+     # ============================================================
+     # ORANGEFOX SYNC TOOL
+     # ============================================================
+     - name: Clone OrangeFox sync
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Clone OrangeFox sync"
+
+         mkdir -p "${GITHUB_WORKSPACE}/OrangeFox"
+         cd "${GITHUB_WORKSPACE}/OrangeFox"
+
+         if [ -d "sync/.git" ]; then
+           cd sync
+           git fetch --depth=1 origin
+           git reset --hard origin/HEAD
+         else
+           rm -rf sync
+           git clone --depth=1 https://gitlab.com/OrangeFox/sync.git sync
+         fi
+
+         "$STATE_DIR/stage_end.sh" "Clone OrangeFox sync" success
+
+     # ============================================================
+     # SELF HOSTED REPAIR
+     # ============================================================
+     - name: Repair corrupted self-hosted checkout
+       if: inputs.RUNNER_TYPE == 'self-hosted'
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Repair self-hosted tree"
+
+         if [ -d "$SYNC_PATH/.repo" ]; then
+           cd "$SYNC_PATH"
+
+           repo forall -c '
+             if ! git status >/dev/null 2>&1; then
+               echo "Removing corrupted checkout: $REPO_PATH"
+               rm -rf "$REPO_PATH"
+             fi
+           ' 2>&1 || true
+         fi
+
+         "$STATE_DIR/stage_end.sh" "Repair self-hosted tree" success
+
+     - name: Reset self-hosted patched files
+       if: inputs.RUNNER_TYPE == 'self-hosted'
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         if [ -d "$SYNC_PATH/.repo" ]; then
+           cd "$SYNC_PATH"
+
+           repo forall -c '
+             git checkout -f -- . >/dev/null 2>&1 || true
+             git clean -fd >/dev/null 2>&1 || true
+           ' 2>&1 || true
+         fi
+
+     # ============================================================
+     # SOURCE SYNC
+     # ============================================================
+     - name: Sync OrangeFox sources
+       shell: bash
+       run: |
+         set +e
+
+         "$STATE_DIR/stage_start.sh" "Sync OrangeFox sources"
+
+         cd "${GITHUB_WORKSPACE}/OrangeFox/sync"
+         chmod +x ./orangefox_sync.sh
+
+         SYNC_LOG="$STATE_DIR/sync.log"
+         : > "$SYNC_LOG"
+
+         echo "OrangeFox branch: $SYNC_BRANCH" | tee -a "$SYNC_LOG"
+         echo "Primary repo jobs: $REPO_SYNC_JOBS" | tee -a "$SYNC_LOG"
+
+         # --------------------------------------------------------
+         # FIRST ATTEMPT
+         # --------------------------------------------------------
+
+         ./orangefox_sync.sh \
+           --branch "$SYNC_BRANCH" \
+           --path "$SYNC_PATH" \
+           2>&1 | tee -a "$SYNC_LOG"
+
+         SYNC_STATUS=${PIPESTATUS[0]}
+
+         # --------------------------------------------------------
+         # RETRY
+         # --------------------------------------------------------
+
+         if [ "$SYNC_STATUS" -ne 0 ]; then
+
+           echo
+           echo "========================================"
+           echo "⚠️ INITIAL SYNC FAILED — RETRYING"
+           echo "========================================"
+
+           if grep -Eqi 'resource_exhausted|cannot assign requested address|errno 99|too many open files|no space left' "$SYNC_LOG" 2>/dev/null; then
+             echo "Detected resource exhaustion. Retrying with -j1..."
+           else
+             echo "Retrying with -j1..."
+           fi
+
+           cd "$SYNC_PATH" 2>/dev/null || true
+
+           repo sync -j1 --force-sync -c --no-clone-bundle --no-tags 2>&1 | tee -a "$SYNC_LOG"
+           SYNC_STATUS=${PIPESTATUS[0]}
+         fi
+
+         if [ "$SYNC_STATUS" -ne 0 ]; then
+           echo "SYNC" > "$STATE_DIR/failure_reason"
+           "$STATE_DIR/stage_end.sh" "Sync OrangeFox sources" failure
+           exit 1
+         fi
+
+         "$STATE_DIR/stage_end.sh" "Sync OrangeFox sources" success
+
+     # ============================================================
+     # CLONE DEVICE TREE
+     # ============================================================
+     - name: Clone device tree
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Clone Device Tree"
+
+         cd "$SYNC_PATH"
+
+         DT_URL="${{ inputs.DT_REPO_URL }}"
+         DT_BRANCH="${{ inputs.DT_BRANCH }}"
+
+         rm -rf device_tree_staging
+
+         git clone --depth=1 --single-branch --branch "$DT_BRANCH" "$DT_URL" device_tree_staging
+
+         STAGING_PATH="$SYNC_PATH/device_tree_staging"
+         cd "$STAGING_PATH"
+
+         DEVICE_MAKEFILE=""
+         DEVICE_DIRECTORY=""
+         DEVICE_NAME=""
+
+         while IFS= read -r -d '' file; do
+           P_NAME="$(grep -m1 '^[[:space:]]*PRODUCT_NAME' "$file" | awk -F'=' '{print $2}' | tr -d ' ' || true)"
+           P_BRAND="$(grep -m1 '^[[:space:]]*PRODUCT_BRAND' "$file" | awk -F'=' '{print $2}' | tr -d ' ' || true)"
+           P_DEVICE="$(grep -m1 '^[[:space:]]*PRODUCT_DEVICE' "$file" | awk -F'=' '{print $2}' | tr -d ' ' || true)"
+
+           if [ -n "$P_NAME" ] && [ -n "$P_BRAND" ] && [ -n "$P_DEVICE" ]; then
+             DEVICE_MAKEFILE="$(basename "$file")"
+             DEVICE_DIRECTORY="device/$P_BRAND"
+             DEVICE_NAME="$P_DEVICE"
+             break
+           fi
+         done < <(find . -maxdepth 3 -type f -name "*.mk" -print0)
+
+         if [ -z "$DEVICE_NAME" ]; then
+           echo "::error::Could not detect device codename from the supplied tree."
+           "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+           exit 1
+         fi
+
+         mkdir -p "$SYNC_PATH/$DEVICE_DIRECTORY"
+         rm -rf "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+         mv "$STAGING_PATH" "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+
+         TREE_PATH="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+         COMMIT_ID="$(git -C "$TREE_PATH" rev-parse HEAD)"
+
+         # Remove old LZ4 flag that breaks newer OrangeFox ramdisk
+         if [ -f "$TREE_PATH/BoardConfig.mk" ]; then
+           sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d' \
+             "$TREE_PATH/BoardConfig.mk" || true
+         fi
+
+         {
+           echo "DEVICE_NAME=$DEVICE_NAME"
+           echo "DEVICE_DIRECTORY=$DEVICE_DIRECTORY"
+           echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE"
+           echo "DEVICE_TREE_PATH=$TREE_PATH"
+           echo "COMMIT_ID=$COMMIT_ID"
+         } >> "$GITHUB_ENV"
+
+         echo "========================================"
+         echo "Detected device"
+         echo "  Device : $DEVICE_NAME"
+         echo "  Path   : $DEVICE_DIRECTORY/$DEVICE_NAME"
+         echo "  Tree   : $DEVICE_MAKEFILE"
+         echo "  Commit : $COMMIT_ID"
+         echo "========================================"
+
+         "$STATE_DIR/stage_end.sh" "Clone Device Tree" success
+
+     # ============================================================
+     # DOWNLOAD MAGISK
+     # ============================================================
+     - name: Download latest Magisk
+       if: inputs.USE_LATEST_MAGISK == true
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Download Magisk"
+
+         mkdir -p "$HOME/Magisk"
+         cd "$HOME/Magisk"
+
+         API_HEADERS=(-H "Accept: application/vnd.github+json")
+         if [ -n "${GT_TOKEN:-}" ]; then
+           API_HEADERS+=(-H "Authorization: Bearer ${GT_TOKEN}")
+         fi
+
+         RESPONSE="$(curl -fsSL \
+           "${API_HEADERS[@]}" \
+           https://api.github.com/repos/topjohnwu/Magisk/releases/latest)"
+
+         URL="$(echo "$RESPONSE" | jq -r \
+           '[.assets[] | select(.name | test("^Magisk-.*\\.apk$")) | .browser_download_url][0]')"
+
+         if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+           echo "::error::No Magisk APK was found in the latest release."
+           echo "$RESPONSE" | jq -r '.assets[].name' || true
+           "$STATE_DIR/stage_end.sh" "Download Magisk" failure
+           exit 1
+         fi
+
+         echo "Downloading: $URL"
+         curl -fL "$URL" -o magisk.apk
+         mv magisk.apk Magisk-latest.zip
+
+         echo "FOX_USE_SPECIFIC_MAGISK_ZIP=$HOME/Magisk/Magisk-latest.zip" >> "$GITHUB_ENV"
+
+         "$STATE_DIR/stage_end.sh" "Download Magisk" success
+
+     # ============================================================
+     # LDCHECK
+     # ============================================================
+     - name: Configure LDCHECK
+       if: inputs.LDCHECK == true
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         echo "LDCHECK enabled."
+         echo "Requested path: ${{ inputs.LDCHECKPATH }}"
+
+         {
+           echo "LDCHECK_ENABLED=true"
+           echo "LDCHECK_PATH=${{ inputs.LDCHECKPATH }}"
+         } >> "$GITHUB_ENV"
+
+     # ============================================================
+     # BUILD ORANGEFOX
+     # ============================================================
+     - name: Build OrangeFox
+       shell: bash
+       run: |
+         "$STATE_DIR/stage_start.sh" "Build OrangeFox"
+
+         cd "$SYNC_PATH"
+
+         # CRITICAL FIX: envsetup.sh references $TOP before defining it.
+         # With set -u this crashes. We export TOP first, then relax
+         # strict mode only around the source/lunch calls.
+         export TOP="$SYNC_PATH"
+         export ZSH_VERSION=""
+
+         set +e
+         set +u
+
+         source build/envsetup.sh
+         ENVSETUP_STATUS=$?
+
+         set -e
+         set -u
+
+         if [ "$ENVSETUP_STATUS" -ne 0 ]; then
+           echo "::error::envsetup.sh failed with code $ENVSETUP_STATUS"
+           echo "BUILD" > "$STATE_DIR/failure_reason"
+           "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
+           exit 1
+         fi
+
+         export FOX_BUILD_DEVICE="$DEVICE_NAME"
+         export OF_MAINTAINER="$OF_MAINTAINER"
+         export ALLOW_MISSING_DEPENDENCIES=true
+         export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+         export FOX_BUILD_TYPE="Unofficial-CI"
+         export LC_ALL=C
+         export USE_CCACHE=1
+         export CCACHE_EXEC="$(command -v ccache)"
+         export FOX_MAINTAINER_PATCH_VERSION=1
+         export FOX_AB_DEVICE=1
+         export FOX_VIRTUAL_AB_DEVICE=1
+
+         if [ -n "${FOX_USE_SPECIFIC_MAGISK_ZIP:-}" ]; then
+           export FOX_USE_SPECIFIC_MAGISK_ZIP
+         fi
+
+         LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
+
+         if [ -f "$LUNCH_OVERRIDE" ]; then
+           LUNCH_TARGET="$(tr -d '[:space:]' < "$LUNCH_OVERRIDE")"
+         else
+           LUNCH_TARGET="twrp_${DEVICE_NAME}-eng"
+         fi
+
+         echo "Lunch target: $LUNCH_TARGET"
+
+         set +e
+         lunch "$LUNCH_TARGET"
+         LUNCH_STATUS=$?
+         set -e
+
+         if [ "$LUNCH_STATUS" -ne 0 ]; then
+           echo "::error::lunch failed with code $LUNCH_STATUS"
+           echo "BUILD" > "$STATE_DIR/failure_reason"
+           "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
+           exit 1
+         fi
+
+         make clean
+
+         mka adbd "$TARGET"
+
+         "$STATE_DIR/stage_end.sh" "Build OrangeFox" success
+
+     # ============================================================
+     # VALIDATE OUTPUT
+     # ============================================================
+     - name: Validate build output
+       shell: bash
+       run: |
+         set -euo pipefail
+
+         "$STATE_DIR/stage_start.sh" "Validate Output"
+
+         OUT="$SYNC_PATH/out/target/product/$DEVICE_NAME"
+
+         case "$TARGET" in
+           vendorbootimage)
+             IMAGE="$OUT/vendor_boot.img"
+             RELEASE_IMAGE="OrangeFox-${DEVICE_NAME}-vendor_boot.img"
+             ;;
+           recoveryimage)
+             IMAGE="$OUT/recovery.img"
+             RELEASE_IMAGE="OrangeFox-${DEVICE_NAME}-recovery.img"
+             ;;
+           bootimage)
+             IMAGE="$OUT/boot.img"
+             RELEASE_IMAGE="OrangeFox-${DEVICE_NAME}-boot.img"
+             ;;
+         esac
+
+         if [ ! -f "$IMAGE" ]; then
+           echo "::error::Expected image was not produced: $IMAGE"
+           echo "Available output:"
+           find "$OUT" -maxdepth 1 -type f -printf '%f\n' | sort || true
+           echo "BUILD" > "$STATE_DIR/failure_reason"
+           "$STATE_DIR/stage_end.sh" "Validate Output" failure
+           exit 1
+         fi
+
+         SIZE="$(stat -c%s "$IMAGE")"
+         MD5="$(md5sum "$IMAGE" | awk '{print $1}')"
+
+         cp -f "$IMAGE" "$OUT/$RELEASE_IMAGE"
+
+         ZIP="$(find "$OUT" -maxdepth 1 -type f -iname 'OrangeFox*.zip' -print -quit || true)"
+
+         {
+           echo "OUT_DIR=$OUT"
+           echo "IMAGE_PATH=$IMAGE"
+           echo "RELEASE_IMAGE=$RELEASE_IMAGE"
+           echo "IMAGE_SIZE=$SIZE"
+           echo "MD5_IMG=$MD5"
+           echo "CHECK_IMG_IS_OK=true"
+           echo "FOX_ZIP=$ZIP"
+           echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)"
+         } >> "$GITHUB_ENV"
+
+         echo "========================================"
+         echo "Build output verified"
+         echo "Image : $IMAGE"
+         echo "Size  : $SIZE bytes"
+         echo "MD5   : $MD5"
+         echo "========================================"
+
+         "$STATE_DIR/stage_end.sh" "Validate Output" success
+
+     # ============================================================
+     # GITHUB RELEASE
+     # ============================================================
+     - name: Upload to GitHub Release
+       if: env.CHECK_IMG_IS_OK == 'true'
+       uses: softprops/action-gh-release@v2
+       with:
+         files: |
+           ${{ env.IMAGE_PATH }}
+           ${{ env.OUT_DIR }}/${{ env.RELEASE_IMAGE }}
+           ${{ env.FOX_ZIP }}
+         name: "🦊 OrangeFox ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}"
+         tag_name: "build-${{ github.run_id }}"
+         token: ${{ secrets.GITHUB_TOKEN }}
+         body: |
+           ## 🦊 OrangeFox Recovery — `${{ env.DEVICE_NAME }}`
+
+           | | |
+           |---|---|
+           | **OrangeFox** | `${{ env.FOX_BRANCH }}` |
+           | **Target** | `${{ env.TARGET }}` |
+           | **Device tree** | `${{ inputs.DT_REPO_URL }}` |
+           | **Tree branch** | `${{ inputs.DT_BRANCH }}` |
+           | **Tree commit** | `${{ env.COMMIT_ID }}` |
+           | **Maintainer** | `${{ env.OF_MAINTAINER }}` |
+           | **Build date** | `${{ env.BUILD_DATE }}` |
+           | **Image size** | `${{ env.IMAGE_SIZE }}` bytes |
+           | **MD5** | `${{ env.MD5_IMG }}` |
+
+     # ============================================================
+     # MIRROR — OSHI.AT
+     # ============================================================
+     - name: Mirror image to oshi.at
+       if: env.CHECK_IMG_IS_OK == 'true' && inputs.UPLOAD_RESULTS == true
+       continue-on-error: true
+       shell: bash
+       run: |
+         set -u
+
+         FILE="$IMAGE_PATH"
+
+         RESULT="$(curl -skT "$FILE" \
+           "https://oshi.at/OrangeFox-${DEVICE_NAME}-${TARGET}.img/20160" \
+           2>/dev/null || true)"
+
+         LINK="$(echo "$RESULT" | awk '/DL:/ {print $2; exit}')"
+
+         if [ -n "$LINK" ]; then
+           echo "OSHI_LINK=$LINK" >> "$GITHUB_ENV"
+           echo "oshi.at: $LINK"
+         else
+           echo "oshi.at upload returned no download link."
+         fi
+
+     # ============================================================
+     # MIRROR — GOFILE
+     # ============================================================
+     - name: Mirror image to Gofile
+       if: env.CHECK_IMG_IS_OK == 'true' && inputs.UPLOAD_RESULTS == true
+       continue-on-error: true
+       shell: bash
+       run: |
+         set -u
+
+         FILE="$IMAGE_PATH"
+
+         SERVER="$(curl -fsSL \
+           https://api.gofile.io/servers \
+           | jq -r '.data.servers[0].name // empty' 2>/dev/null || true)"
+
+         if [ -z "$SERVER" ]; then
+           echo "Could not obtain a Gofile server."
+           exit 0
+         fi
+
+         RESPONSE="$(curl -fsSL \
+           -F "file=@${FILE}" \
+           "https://${SERVER}.gofile.io/uploadFile" \
+           2>/dev/null || true)"
+
+         LINK="$(echo "$RESPONSE" | jq -r '.data.downloadPage // empty' 2>/dev/null || true)"
+
+         if [ -n "$LINK" ]; then
+           echo "GOFILE_LINK=$LINK" >> "$GITHUB_ENV"
+           echo "Gofile: $LINK"
+         else
+           echo "Gofile upload returned no download page."
+         fi
+
+     # ============================================================
+     # TELEGRAM COMPLETED
+     # ============================================================
+     - name: Telegram - build completed
+       if: always()
+       continue-on-error: true
+       shell: bash
+       run: |
+         set +e
+
+         # Stop live monitor
+         if [ -f "$STATE_DIR/telegram_monitor_pid" ]; then
+           touch "$STATE_DIR/stop_monitor"
+           sleep 1
+           kill "$(cat "$STATE_DIR/telegram_monitor_pid")" >/dev/null 2>&1 || true
+           rm -f "$STATE_DIR/telegram_monitor_pid"
+         fi
+
+         if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+           echo "Telegram disabled."
+           exit 0
+         fi
+
+         if [ ! -f "$STATE_DIR/telegram_message_id" ]; then
+           echo "No previous Telegram message to edit."
+           exit 0
+         fi
+
+         MESSAGE_ID="$(cat "$STATE_DIR/telegram_message_id")"
+
+         escape_html() {
+           "$STATE_DIR/tg_escape.sh" "$1"
+         }
+
+         if [ "${{ job.status }}" = "success" ]; then
+           STATUS="✅ <b>BUILD SUCCESSFUL</b>"
+         else
+           STATUS="❌ <b>BUILD FAILED</b>"
+         fi
+
+         DEVICE="${DEVICE_NAME:-unknown}"
+         MD5="${MD5_IMG:-N/A}"
+         RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_ID}"
+         LOG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+         TEXT="$(
+           printf \
+             '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n%s\n\n📱 Device: <code>%s</code>\n🌿 OrangeFox: <code>%s</code>\n🎯 Target: <code>%s</code>\n🔢 MD5: <code>%s</code>\n🖥 Runner: <code>%s</code>\n👤 Maintainer: <code>%s</code>\n\n📦 <a href="%s">GitHub Release</a>\n🔗 <a href="%s">Build Logs</a>' \
+             "$STATUS" \
+             "$(escape_html "$DEVICE")" \
+             "$(escape_html "$FOX_BRANCH")" \
+             "$(escape_html "$TARGET")" \
+             "$(escape_html "$MD5")" \
+             "$(escape_html "${{ inputs.RUNNER_TYPE }}")" \
+             "$(escape_html "$OF_MAINTAINER")" \
+             "$RELEASE_URL" \
+             "$LOG_URL"
+         )"
+
+         if [ -n "${OSHI_LINK:-}" ]; then
+           TEXT="${TEXT}\n☁️ <a href=\"${OSHI_LINK}\">oshi.at</a>"
+         fi
+
+         if [ -n "${GOFILE_LINK:-}" ]; then
+           TEXT="${TEXT}\n☁️ <a href=\"${GOFILE_LINK}\">Gofile</a>"
+         fi
+
+         RESPONSE="$(
+           curl -sS \
+             --connect-timeout 10 \
+             --max-time 30 \
+             -X POST \
+             "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
+             -d "chat_id=${TG_CHAT_ID}" \
+             -d "message_id=${MESSAGE_ID}" \
+             --data-urlencode "parse_mode=HTML" \
+             --data-urlencode "text=${TEXT}" \
+             2>&1
+         )"
+
+         if echo "$RESPONSE" | grep -q '"ok":true'; then
+           echo "Telegram completed notification sent."
+         else
+           echo "::warning::Telegram completed notification failed."
+           echo "$RESPONSE"
+         fi
+
+     # ============================================================
+     # CCACHE STATISTICS
+     # ============================================================
+     - name: ccache statistics
+       if: always()
+       shell: bash
+       run: |
+         ccache -s || true
