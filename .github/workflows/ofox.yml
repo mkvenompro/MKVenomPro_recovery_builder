@@ -63,10 +63,25 @@ on:
         default: "system/bin/qseecomd"
         type: string
 
+      RUNNER_TYPE:
+        description: "Runner"
+        required: true
+        type: choice
+        default: "github"
+        options:
+          - "github"
+          - "self-hosted"
+
+      SELF_HOSTED_LABEL:
+        description: "Self-hosted runner label (only used if RUNNER_TYPE = self-hosted)"
+        required: false
+        default: "self-hosted"
+        type: string
+
 jobs:
   build:
     name: "🦊 fox_${{ inputs.FOX_BRANCH }}"
-    runs-on: ubuntu-22.04
+    runs-on: ${{ inputs.RUNNER_TYPE == 'self-hosted' && inputs.SELF_HOSTED_LABEL || 'ubuntu-22.04' }}
     timeout-minutes: 720
     permissions:
       contents: write
@@ -115,9 +130,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Clean up runner disk space
+        if: inputs.RUNNER_TYPE != 'self-hosted'
         uses: rokibhasansagar/slimhub_actions@main
 
       - name: Add swap space
+        if: inputs.RUNNER_TYPE != 'self-hosted'
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 12
