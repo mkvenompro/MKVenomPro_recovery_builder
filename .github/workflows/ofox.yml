@@ -268,6 +268,28 @@ jobs:
               https://gitlab.com/OrangeFox/sync.git
           fi
 
+      - name: Repair corrupted repo checkouts (self-hosted reruns)
+        if: inputs.RUNNER_TYPE == 'self-hosted'
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [ -d "$SYNC_PATH/.repo" ]; then
+            echo "Existing source tree found at $SYNC_PATH — checking for corrupted checkouts left from an interrupted run..."
+            cd "$SYNC_PATH"
+
+            repo forall -c '
+              if ! git status >/dev/null 2>&1; then
+                echo "Corrupted checkout detected: $REPO_PATH — removing so repo can re-clone it."
+                rm -rf "$SYNC_PATH/$REPO_PATH"
+              fi
+            ' 2>&1 || echo "::warning::repo forall repair pass finished with warnings — continuing."
+
+            echo "Repair pass complete."
+          else
+            echo "No existing source tree — nothing to repair."
+          fi
+
       - name: Sync OrangeFox sources
         shell: bash
         run: |
