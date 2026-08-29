@@ -911,8 +911,17 @@ jobs:
           export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export FOX_BUILD_TYPE="Unofficial-CI"
           export LC_ALL=C
-          export USE_CCACHE=1
-          export CCACHE_EXEC="$(command -v ccache)"
+          if [ "${{ inputs.RUNNER_TYPE }}" = "self-hosted" ]; then
+            echo "ccache disabled on self-hosted: it has repeatedly failed with"
+            echo "'Read-only file system' on its very first invocation on this"
+            echo "server regardless of directory/permission fixes. Building"
+            echo "without it — slower, but reliable."
+            export USE_CCACHE=0
+            unset CCACHE_EXEC CCACHE_DIR CCACHE_BASEDIR CCACHE_NOHASHDIR CCACHE_TEMPDIR
+          else
+            export USE_CCACHE=1
+            export CCACHE_EXEC="$(command -v ccache)"
+          fi
           export FOX_MAINTAINER_PATCH_VERSION=1
           export FOX_AB_DEVICE=1
           export FOX_VIRTUAL_AB_DEVICE=1
