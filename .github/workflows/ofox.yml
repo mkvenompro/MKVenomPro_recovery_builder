@@ -943,7 +943,10 @@ jobs:
 
           make clean
 
-          mka adbd "$TARGET"
+          BUILD_JOBS="$(nproc)"
+          echo "Capping build parallelism at ${BUILD_JOBS} jobs (matches this machine's CPU count)."
+
+          mka adbd "$TARGET" -j"$BUILD_JOBS"
           MKA_STATUS=$?
 
           if [ "$MKA_STATUS" -ne 0 ]; then
