@@ -532,10 +532,42 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-${{ hashFiles('**/BoardConfig.mk') }}
+          key: ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-${{ hashFiles('**/BoardConfig.mk') }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
-            ccache-${{ runner.os }}-
+            ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
+            ccache-v2-${{ runner.os }}-
+
+      # ============================================================
+      # CCACHE PERMISSION REPAIR
+      # ============================================================
+      # ccache intentionally stores some cached object files as
+      # read-only (mode 0444) as part of its normal operation. If a
+      # cache save/restore ever happened while the directory itself
+      # (not just individual files) ended up without write
+      # permission — e.g. a previous run saved mid-failure, or a
+      # restored tarball kept odd permission bits — every build
+      # after that will hit "ccache: error: Read-only file system"
+      # on the exact same objects, every single time. Force the
+      # whole tree back to writable before using it, regardless of
+      # what was restored.
+      - name: Repair ccache directory permissions
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [ -n "${CCACHE_DIR:-}" ] && [ -d "$CCACHE_DIR" ]; then
+            echo "Ensuring $CCACHE_DIR is writable..."
+            chmod -R u+rwX "$CCACHE_DIR" 2>/dev/null || true
+
+            TEST="$CCACHE_DIR/.repair-write-test"
+            if touch "$TEST" 2>/dev/null; then
+              rm -f "$TEST"
+              echo "✅ CCACHE_DIR is writable."
+            else
+              echo "::warning::CCACHE_DIR is still not writable after chmod — clearing it."
+              rm -rf "${CCACHE_DIR:?}"/*
+            fi
+          fi
 
       # ============================================================
       # GIT AUTHENTICATION
