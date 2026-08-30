@@ -911,17 +911,18 @@ jobs:
           export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export FOX_BUILD_TYPE="Unofficial-CI"
           export LC_ALL=C
-          if [ "${{ inputs.RUNNER_TYPE }}" = "self-hosted" ]; then
-            echo "ccache disabled on self-hosted: it has repeatedly failed with"
-            echo "'Read-only file system' on its very first invocation on this"
-            echo "server regardless of directory/permission fixes. Building"
-            echo "without it — slower, but reliable."
-            export USE_CCACHE=0
-            unset CCACHE_EXEC CCACHE_DIR CCACHE_BASEDIR CCACHE_NOHASHDIR CCACHE_TEMPDIR
-          else
-            export USE_CCACHE=1
-            export CCACHE_EXEC="$(command -v ccache)"
-          fi
+          export USE_CCACHE=1
+          export CCACHE_EXEC="$(command -v ccache)"
+
+          # AOSP/Soong deliberately makes most of the source tree
+          # read-only during the build to catch tools that write into
+          # source instead of out/. bootable/recovery/libblkid has an
+          # old build rule that tries to write a scratch file inside
+          # the source dir, which trips this protection and shows up
+          # as ccache's compiler wrapper getting a
+          # "Read-only file system" error — on any runner, self-hosted
+          # or GitHub-hosted alike. Allowlist it explicitly.
+          export BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST="bootable/recovery"
           export FOX_MAINTAINER_PATCH_VERSION=1
           export FOX_AB_DEVICE=1
           export FOX_VIRTUAL_AB_DEVICE=1
@@ -955,8 +956,8 @@ jobs:
           BUILD_JOBS="$(nproc)"
           echo "Capping build parallelism at ${BUILD_JOBS} jobs (matches this machine's CPU count)."
 
-          mka adbd "$TARGET" -j"$BUILD_JOBS"
-          MKA_STATUS=$?
+          mka adbd "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
+          MKA_STATUS=${PIPESTATUS[0]}
 
           if [ "$MKA_STATUS" -ne 0 ]; then
             echo "::error::mka failed with code $MKA_STATUS"
@@ -1146,6 +1147,19 @@ jobs:
             "$STATE_DIR/tg_escape.sh" "$1"
           }
 
+          # ── Total elapsed time ──────────────────────────────────
+          BUILD_START_TS="$(cat "$STATE_DIR/build_start" 2>/dev/null || echo "$(date +%s)")"
+          NOW_TS="$(date +%s)"
+          TOTAL_SECONDS=$((NOW_TS - BUILD_START_TS))
+          TOTAL_H=$((TOTAL_SECONDS / 3600))
+          TOTAL_M=$(((TOTAL_SECONDS % 3600) / 60))
+          TOTAL_S=$((TOTAL_SECONDS % 60))
+          if [ "$TOTAL_H" -gt 0 ]; then
+            TOTAL_TIME_STR="${TOTAL_H}h ${TOTAL_M}m ${TOTAL_S}s"
+          else
+            TOTAL_TIME_STR="${TOTAL_M}m ${TOTAL_S}s"
+          fi
+
           # ── Detect failure reason ──────────────────────────────
           FAILED_STAGE=""
           FAILURE_REASON=""
@@ -1168,10 +1182,10 @@ jobs:
           fi
 
           if [ "${{ job.status }}" = "success" ]; then
-            STATUS="✅ <b>BUILD SUCCESSFUL</b>"
+            STATUS="✅ <b>BUILD SUCCESSFUL</b> — ${TOTAL_TIME_STR}"
             STATUS_ICON="🟢"
           else
-            STATUS="❌ <b>BUILD FAILED</b>"
+            STATUS="❌ <b>BUILD FAILED</b> — ${TOTAL_TIME_STR}"
             STATUS_ICON="🔴"
           fi
 
