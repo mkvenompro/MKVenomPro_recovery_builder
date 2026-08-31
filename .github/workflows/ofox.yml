@@ -349,31 +349,14 @@ jobs:
           set -euo pipefail
           "$STATE_DIR/stage_start.sh" "Configure ccache"
 
-          CANDIDATES=(
-            "${RUNNER_TEMP}/mkvenompro-ccache"
-            "${GITHUB_WORKSPACE}/.ccache"
-            "${HOME}/.cache/ccache"
-            "${HOME}/.ccache"
-          )
+          # Keep ccache fully inside the workspace (writable, not under RUNNER_TEMP)
+          # so actions/cache restores it in a location ccache can actually lock/write.
+          CCACHE_SELECTED="${GITHUB_WORKSPACE}/.ccache"
 
-          CCACHE_SELECTED=""
-          for DIR in "${CANDIDATES[@]}"; do
-            mkdir -p "$DIR" 2>/dev/null || continue
-            TEST="$DIR/.write-test"
-            if touch "$TEST" 2>/dev/null; then
-              rm -f "$TEST"
-              CCACHE_SELECTED="$DIR"
-              break
-            fi
-          done
+          rm -rf "$CCACHE_SELECTED"
+          mkdir -p "$CCACHE_SELECTED"
 
-          if [ -z "$CCACHE_SELECTED" ]; then
-            echo "::error::No writable ccache directory."
-            echo "CCACHE" > "$STATE_DIR/failure_reason"
-            "$STATE_DIR/stage_end.sh" "Configure ccache" failure
-            exit 1
-          fi
-
+          # ccache temp dir MUST stay on the same writable filesystem as CCACHE_DIR.
           SAFE_TMPDIR="${GITHUB_WORKSPACE}/.tmp"
           mkdir -p "$SAFE_TMPDIR"
 
@@ -382,12 +365,27 @@ jobs:
             echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
             echo "CCACHE_NOHASHDIR=true"
             echo "CCACHE_TEMPDIR=$SAFE_TMPDIR"
+            echo "CCACHE_COMPRESS=1"
             echo "TMPDIR=$SAFE_TMPDIR"
           } >> "$GITHUB_ENV"
 
-          mkdir -p "$CCACHE_SELECTED"
-          ccache -M "${{ inputs.CCACHE_SIZE }}"
-          ccache -z
+          # Cap ccache to available disk so it never fills the disk and triggers
+          # an EROFS / read-only remount (the real cause of the build failure).
+          SET_SIZE="${{ inputs.CCACHE_SIZE }}"
+          AVAIL_KB=$(df -Pk "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)"G"}')
+          echo "Workspace available: $AVAIL_KB (requested ccache: $SET_SIZE)"
+          case "$SET_SIZE" in
+            20G)  EFFECTIVE_SIZE="8G" ;;
+            50G)  EFFECTIVE_SIZE="10G" ;;
+            80G)  EFFECTIVE_SIZE="12G" ;;
+            100G) EFFECTIVE_SIZE="12G" ;;
+            150G) EFFECTIVE_SIZE="12G" ;;
+            200G) EFFECTIVE_SIZE="12G" ;;
+            *)    EFFECTIVE_SIZE="10G" ;;
+          esac
+          echo "Effective ccache size: $EFFECTIVE_SIZE"
+          ccache -M "$EFFECTIVE_SIZE"
+          echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
           echo "CCACHE_DIR: $CCACHE_SELECTED"
           echo "TMPDIR: $SAFE_TMPDIR"
           ccache -s || true
@@ -413,21 +411,27 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          # actions/cache restores cached files as READ-ONLY (0444).
+          # ccache refuses to write locks/index into a read-only tree (EROFS).
+          # Force every file/dir writable BEFORE the build; purge if that is impossible.
           if [ -n "${CCACHE_DIR:-}" ] && [ -d "$CCACHE_DIR" ]; then
             echo "Repairing ccache permissions..."
-            chmod u+rwx "$CCACHE_DIR" 2>/dev/null || true
-            chmod -R u+rwX "$CCACHE_DIR" 2>/dev/null || true
+            chmod -R u+rwX,go-w "$CCACHE_DIR" 2>/dev/null || true
             chown -R "$(whoami):$(whoami)" "$CCACHE_DIR" 2>/dev/null || true
             TEST="$CCACHE_DIR/.repair-write-test"
             if touch "$TEST" 2>/dev/null; then
               rm -f "$TEST"
+              chmod -w "$CCACHE_DIR/.repair-write-test" 2>/dev/null || true
               echo "✅ CCACHE_DIR writable."
             else
-              echo "::warning::Still not writable — clearing."
-              rm -rf "${CCACHE_DIR:?}"/*
+              echo "::warning::Still not writable — clearing and recreating."
+              rm -rf "${CCACHE_DIR:?}"
               mkdir -p "$CCACHE_DIR"
             fi
           fi
+          # Give soong/ccache a guaranteed writable scratch dir (not RUNNER_TEMP).
+          mkdir -p "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
+          chmod -R u+rwX "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
 
       # ============================================================
       # GIT AUTHENTICATION
@@ -1027,9 +1031,13 @@ jobs:
             if grep -q "ccache: error: Read-only file system" "$STATE_DIR/build.log" 2>/dev/null; then
               echo
               echo "========================================"
-              echo "⚠️ CCACHE READ-ONLY ERROR — RETRYING WITHOUT CCACHE"
+              echo "⚠️ CCACHE READ-ONLY ERROR — RESETTING CACHE AND RETRYING"
               echo "========================================"
-              export CCACHE_DISABLE=1
+              # Recreate the cache dir writable from scratch, keep ccache ENABLED.
+              rm -rf "${CCACHE_DIR:?}"
+              mkdir -p "$CCACHE_DIR"
+              chmod -R u+rwX "$CCACHE_DIR"
+              ccache -M "${CCACHE_MAXSIZE:-10G}" || true
               make clean
               mka adbd "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
               MKA_STATUS=${PIPESTATUS[0]}
