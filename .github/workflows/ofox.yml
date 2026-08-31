@@ -371,9 +371,11 @@ jobs:
 
           # Cap ccache to available disk so it never fills the disk and triggers
           # an EROFS / read-only remount (the real cause of the build failure).
+          # OrangeFox out/ lives on the SAME filesystem as CCACHE_DIR here, so a
+          # full disk turns the whole fs read-only and every ccache write dies.
+          # If free space is too tight to reserve the whole out/ plus ccache, we
+          # DISABLE ccache up front and free the space so the build can complete.
           SET_SIZE="${{ inputs.CCACHE_SIZE }}"
-          AVAIL_KB=$(df -Pk "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)"G"}')
-          echo "Workspace available: $AVAIL_KB (requested ccache: $SET_SIZE)"
           case "$SET_SIZE" in
             20G)  EFFECTIVE_SIZE="8G" ;;
             50G)  EFFECTIVE_SIZE="10G" ;;
@@ -383,9 +385,28 @@ jobs:
             200G) EFFECTIVE_SIZE="12G" ;;
             *)    EFFECTIVE_SIZE="10G" ;;
           esac
-          echo "Effective ccache size: $EFFECTIVE_SIZE"
-          ccache -M "$EFFECTIVE_SIZE"
-          echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
+
+          # Estimate out/ size: a full OrangeFox tree needs roughly this much.
+          AVAIL_BYTES=$(df -Pk "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print $4*1024}')
+          AVAIL_GB=$(df -h "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print $4}')
+          echo "Workspace available: ${AVAIL_GB:-?} (requested ccache: $SET_SIZE, effective: $EFFECTIVE_SIZE)"
+          MIN_BYTES=$((24 * 1024 * 1024 * 1024))  # 24G ~ conservative out/ + ccache floor
+          if [ -n "$AVAIL_BYTES" ] && [ "$AVAIL_BYTES" -lt "$MIN_BYTES" ]; then
+            echo "::warning::Only ${AVAIL_GB:-?} free — too tight for ccache + OrangeFox out/. Disabling ccache to protect the build."
+            ccache -o disable 2>/dev/null || true
+            rm -rf "$CCACHE_SELECTED" 2>/dev/null || true
+            mkdir -p "$CCACHE_SELECTED"
+            echo "CCACHE_DISABLE=1" >> "$GITHUB_ENV"
+            echo "USE_CCACHE=0" >> "$GITHUB_ENV"
+            echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
+          else
+            echo "Effective ccache size: $EFFECTIVE_SIZE"
+            ccache -o enable 2>/dev/null || true
+            ccache -M "$EFFECTIVE_SIZE" 2>/dev/null || true
+            echo "CCACHE_DISABLE=0" >> "$GITHUB_ENV"
+            echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+            echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
+          fi
           echo "CCACHE_DIR: $CCACHE_SELECTED"
           echo "TMPDIR: $SAFE_TMPDIR"
           ccache -s || true
@@ -1114,8 +1135,11 @@ jobs:
           export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export FOX_BUILD_TYPE="Unofficial-CI"
           export LC_ALL=C
-          export USE_CCACHE=1
+          # USE_CCACHE is set by "Configure ccache" (0 when the disk is too tight).
+          export USE_CCACHE="${USE_CCACHE:-1}"
+          export CCACHE_DISABLE="${CCACHE_DISABLE:-0}"
           export CCACHE_EXEC="$(command -v ccache)"
+          echo "ccache USE_CCACHE=$USE_CCACHE CCACHE_DISABLE=$CCACHE_DISABLE"
 
           EXTRA="${{ inputs.EXTRA_CMD }}"
           if [ -n "$EXTRA" ]; then
@@ -1172,14 +1196,20 @@ jobs:
             if grep -q "ccache: error: Read-only file system" "$STATE_DIR/build.log" 2>/dev/null; then
               echo
               echo "========================================"
-              echo "⚠️ CCACHE READ-ONLY ERROR — RESETTING CACHE AND RETRYING"
+              echo "⚠️ CCACHE READ-ONLY ERROR — DISABLING CCACHE AND RETRYING"
               echo "========================================"
-              # Recreate the cache dir writable from scratch, keep ccache ENABLED.
-              rm -rf "${CCACHE_DIR:?}"
-              mkdir -p "$CCACHE_DIR"
-              chmod -R u+rwX "$CCACHE_DIR"
-              ccache -M "${CCACHE_MAXSIZE:-10G}" || true
-              make clean
+              # The filesystem backing CCACHE_DIR went read-only (usually the disk
+              # ran out of space). Recreating the dir does NOT help because the
+              # fs is still read-only. Disable ccache entirely for this run so the
+              # build can complete (slower, but deterministic) instead of dying.
+              ccache -o disable 2>/dev/null || true
+              export CCACHE_DISABLE=1
+              export USE_CCACHE=0
+              rm -rf "${CCACHE_DIR:?}" 2>/dev/null || true
+              # Free the disk: drop the ccache and any stale out/ so writes succeed.
+              make clean 2>/dev/null || true
+              df -h "$CCACHE_DIR" 2>/dev/null || true
+              echo "Retrying build WITHOUT ccache..."
               mka adbd "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
               MKA_STATUS=${PIPESTATUS[0]}
             fi
