@@ -636,6 +636,7 @@ jobs:
         shell: bash
         run: |
           set +e
+
           if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
             echo "Telegram disabled."
             exit 0
@@ -652,10 +653,35 @@ jobs:
 
           MODEL_LINE=""
           if [ -n "${DEVICE_MODEL:-}" ]; then
-            MODEL_LINE="📱 Model: <code>$(escape_html "$DEVICE_MODEL")</code>"$'\n'
+            MODEL_LINE="📱 <b>Model</b>  <code>$(escape_html "$DEVICE_MODEL")</code>"$'\n'
           fi
 
-          TEXT=$(printf '%s' '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🚀 <b>BUILD STARTED</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>'"$(escape_html "$FOX_BRANCH")"'</code>\n🎯 Target: <code>'"$(escape_html "$TARGET")"'</code>\n🏷️ Brand: <code>'"$(escape_html "${DEVICE_BRAND:-unknown}")"'</code>\n📱 Device: <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>\n'"$MODEL_LINE"'🌲 Tree: <code>'"$(escape_html "${{ inputs.DT_REPO_URL }}")"'</code>\n🌿 Branch: <code>'"$(escape_html "${{ inputs.DT_BRANCH }}")"'</code>\n🖥 Runner: <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>\n⚙️ Sync jobs: <code>'"$(escape_html "$REPO_SYNC_JOBS")"'</code>\n👤 Maintainer: <code>'"$(escape_html "$OF_MAINTAINER")"'</code>\n\n🔵 <b>Current stage:</b> Preparing build\n\n🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Build logs</a>')
+          TEXT=$(printf '%s\n' \
+            '🦊 <b>MKVenomPro • OrangeFox CI</b>' \
+            '' \
+            '╭────────────────────────────╮' \
+            '│ 🚀 <b>BUILD STARTED</b>             │' \
+            '│ ⚡ Initializing pipeline...    │' \
+            '╰────────────────────────────╯' \
+            '' \
+            '📦 <b>BUILD PROFILE</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🌿 <b>OrangeFox</b>  <code>'"$(escape_html "$FOX_BRANCH")"'</code>' \
+            '🎯 <b>Target</b>    <code>'"$(escape_html "$TARGET")"'</code>' \
+            '🏷️ <b>Brand</b>     <code>'"$(escape_html "${DEVICE_BRAND:-unknown}")"'</code>' \
+            '📱 <b>Device</b>    <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>' \
+            "$MODEL_LINE" \
+            '🌲 <b>Tree</b>      <code>'"$(escape_html "${{ inputs.DT_REPO_URL }}")"'</code>' \
+            '🌱 <b>Branch</b>    <code>'"$(escape_html "${{ inputs.DT_BRANCH }}")"'</code>' \
+            '🖥 <b>Runner</b>    <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>' \
+            '⚙️ <b>Jobs</b>      <code>'"$(escape_html "$REPO_SYNC_JOBS")"'</code>' \
+            '👤 <b>Maintainer</b> <code>'"$(escape_html "$OF_MAINTAINER")"'</code>' \
+            '' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🔵 <b>NOW</b>  <code>Preparing build</code>' \
+            '⏱️ <b>Stage timer</b>  <code>00s</code>' \
+            '' \
+            '🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Open GitHub Actions</a>')
 
           RESPONSE=$(curl -sS \
             --connect-timeout 10 \
@@ -687,6 +713,7 @@ jobs:
         shell: bash
         run: |
           set +e
+
           if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
             exit 0
           fi
@@ -724,7 +751,59 @@ jobs:
                 "$STATE_DIR/tg_escape.sh" "$1"
               }
 
-              TEXT=$(printf '%s' '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n🔵 <b>BUILDING</b>\n\n📢 <b>@mkvenompro</b>\n\n🌿 OrangeFox: <code>'"$(escape_html "$FOX_BRANCH")"'</code>\n🎯 Target: <code>'"$(escape_html "$TARGET")"'</code>\n📱 Device: <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>\n🖥 Runner: <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔵 <b>CURRENT STAGE</b>\n🏗️ <b>'"$(escape_html "$STAGE")"'</b>\n⏱️ Stage: <code>'"$(format_time "$STAGE_TIME")"'</code>\n⏱️ Total: <code>'"$(format_time "$TOTAL")"'</code>\n\n━━━━━━━━━━━━━━━━━━━━\n\n🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Build logs</a>')
+              STAGE_LIST=""
+              DONE_COUNT=0
+              if [ -f "$STATE_DIR/completed_stages" ]; then
+                while IFS='|' read -r SNAME SSTATUS SELAPSED; do
+                  [ -z "$SNAME" ] && continue
+                  DONE_COUNT=$((DONE_COUNT + 1))
+                  SM=$((SELAPSED / 60))
+                  SS=$((SELAPSED % 60))
+                  if [ "$SSTATUS" = "success" ]; then
+                    STAGE_LIST="${STAGE_LIST}\n🟢 <code>$(escape_html "$SNAME")</code>  <i>${SM}m ${SS}s</i>"
+                  else
+                    STAGE_LIST="${STAGE_LIST}\n🔴 <code>$(escape_html "$SNAME")</code>  <i>${SM}m ${SS}s</i>"
+                  fi
+                done < "$STATE_DIR/completed_stages"
+              fi
+
+              if [ -z "$STAGE_LIST" ]; then
+                STAGE_LIST="\n⚪ <i>No completed stages yet</i>"
+              fi
+
+              TEXT=$(printf '%s\n' \
+                '🦊 <b>MKVenomPro • OrangeFox CI</b>' \
+                '' \
+                '╭────────────────────────────╮' \
+                '│ 🔵 <b>BUILDING</b>                 │' \
+                '│ ⚙️ Pipeline is running...      │' \
+                '╰────────────────────────────╯' \
+                '' \
+                '📦 <b>BUILD</b>' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '🌿 <b>OrangeFox</b>  <code>'"$(escape_html "$FOX_BRANCH")"'</code>' \
+                '🎯 <b>Target</b>    <code>'"$(escape_html "$TARGET")"'</code>' \
+                '📱 <b>Device</b>    <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>' \
+                '🖥 <b>Runner</b>    <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>' \
+                '' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '🔵 <b>CURRENT STAGE</b>' \
+                '🏗️ <code>'"$(escape_html "$STAGE")"'</code>' \
+                '⏱️ <b>Stage</b>  <code>'"$(format_time "$STAGE_TIME")"'</code>' \
+                '⏳ <b>Total</b>  <code>'"$(format_time "$TOTAL")"'</code>' \
+                '' \
+                '📊 <b>PIPELINE HISTORY</b>' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                "${STAGE_LIST}" \
+                '' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '📈 <b>Completed stages:</b> <code>'"$DONE_COUNT"'</code>' \
+                '🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Live GitHub Logs</a>')
+
+              # Telegram messages have a 4096-character limit. Keep the live dashboard compact.
+              if [ "${#TEXT}" -gt 3900 ]; then
+                TEXT="${TEXT:0:3850}\n\n⚠️ <i>History trimmed to fit Telegram.</i>"
+              fi
 
               curl -sS \
                 --connect-timeout 5 \
@@ -1131,32 +1210,20 @@ jobs:
             "$STATE_DIR/tg_escape.sh" "$1"
           }
 
+          format_time() {
+            local S="${1:-0}"
+            if [ "$S" -lt 60 ]; then
+              printf "%02ds" "$S"
+            elif [ "$S" -lt 3600 ]; then
+              printf "%02dm %02ds" "$((S / 60))" "$((S % 60))"
+            else
+              printf "%02dh %02dm %02ds" "$((S / 3600))" "$(((S % 3600) / 60))" "$((S % 60))"
+            fi
+          }
+
           BUILD_START_TS=$(cat "$STATE_DIR/build_start" 2>/dev/null || date +%s)
           NOW_TS=$(date +%s)
           TOTAL_SECONDS=$((NOW_TS - BUILD_START_TS))
-          TOTAL_H=$((TOTAL_SECONDS / 3600))
-          TOTAL_M=$(((TOTAL_SECONDS % 3600) / 60))
-          TOTAL_S=$((TOTAL_SECONDS % 60))
-          if [ "$TOTAL_H" -gt 0 ]; then
-            TOTAL_TIME_STR="${TOTAL_H}h ${TOTAL_M}m ${TOTAL_S}s"
-          else
-            TOTAL_TIME_STR="${TOTAL_M}m ${TOTAL_S}s"
-          fi
-
-          STAGES_INFO=""
-          if [ -f "$STATE_DIR/completed_stages" ]; then
-            STAGES_INFO=$'\n\n⏱️ <b>STAGES BREAKDOWN</b>\n'
-            while IFS='|' read -r SNAME SSTATUS SELAPSED; do
-              [ -z "$SNAME" ] && continue
-              SM=$((SELAPSED / 60))
-              SS=$((SELAPSED % 60))
-              if [ "$SSTATUS" = "success" ]; then
-                STAGES_INFO="${STAGES_INFO}🟢 <code>$(escape_html "$SNAME")</code> — ${SM}m ${SS}s"$'\n'
-              else
-                STAGES_INFO="${STAGES_INFO}🔴 <code>$(escape_html "$SNAME")</code> — ${SM}m ${SS}s"$'\n'
-              fi
-            done < "$STATE_DIR/completed_stages"
-          fi
 
           FAILED_STAGE=""
           FAILURE_REASON=""
@@ -1170,18 +1237,28 @@ jobs:
           LAST_ERRORS=""
           if [ "${{ job.status }}" != "success" ]; then
             if [ -f "$STATE_DIR/build.log" ]; then
-              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED|failed with|Stop\.|ninja: build stopped' "$STATE_DIR/build.log" | tail -10 | sed 's/^[[:space:]]*//' || true)
+              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED|failed with|Stop\.|ninja: build stopped' "$STATE_DIR/build.log" | tail -8 | sed 's/^[[:space:]]*//' || true)
             fi
             if [ -z "$LAST_ERRORS" ] && [ -f "$STATE_DIR/sync.log" ]; then
-              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED' "$STATE_DIR/sync.log" | tail -10 | sed 's/^[[:space:]]*//' || true)
+              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED' "$STATE_DIR/sync.log" | tail -8 | sed 's/^[[:space:]]*//' || true)
             fi
           fi
 
-          if [ "${{ job.status }}" = "success" ]; then
-            STATUS="✅ <b>BUILD SUCCESSFUL</b>"
-          else
-            STATUS="❌ <b>BUILD FAILED</b>"
+          STAGES_INFO=""
+          DONE_COUNT=0
+          if [ -f "$STATE_DIR/completed_stages" ]; then
+            while IFS='|' read -r SNAME SSTATUS SELAPSED; do
+              [ -z "$SNAME" ] && continue
+              DONE_COUNT=$((DONE_COUNT + 1))
+              if [ "$SSTATUS" = "success" ]; then
+                ICON="🟢"
+              else
+                ICON="🔴"
+              fi
+              STAGES_INFO="${STAGES_INFO}\n${ICON} <code>$(escape_html "$SNAME")</code>  <i>$(format_time "$SELAPSED")</i>"
+            done < "$STATE_DIR/completed_stages"
           fi
+          [ -n "$STAGES_INFO" ] || STAGES_INFO="\n⚪ <i>No stage history recorded.</i>"
 
           DEVICE="${DEVICE_NAME:-unknown}"
           BRAND="${DEVICE_BRAND:-unknown}"
@@ -1190,48 +1267,78 @@ jobs:
           RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_ID}"
           LOG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          DETAILS=""
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_ICON="🟢"
+            STATUS_TITLE="BUILD SUCCESSFUL"
+            STATUS_SUBTITLE="Artifacts verified and ready."
+          else
+            STATUS_ICON="🔴"
+            STATUS_TITLE="BUILD FAILED"
+            STATUS_SUBTITLE="Pipeline stopped — diagnostics attached below."
+          fi
+
+          TEXT=$(printf '%s\n' \
+            '🦊 <b>MKVenomPro • OrangeFox CI</b>' \
+            '' \
+            '╭────────────────────────────╮' \
+            '│ '"$STATUS_ICON"' <b>'"$STATUS_TITLE"'</b>            │' \
+            '│ 🧩 '"$STATUS_SUBTITLE"' │' \
+            '╰────────────────────────────╯' \
+            '' \
+            '📦 <b>BUILD SUMMARY</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🏷️ <b>Brand</b>      <code>'"$(escape_html "$BRAND")"'</code>' \
+            '📱 <b>Device</b>     <code>'"$(escape_html "$DEVICE")"'</code>' \
+            '🌿 <b>OrangeFox</b>  <code>'"$(escape_html "$FOX_BRANCH")"'</code>' \
+            '🎯 <b>Target</b>     <code>'"$(escape_html "$TARGET")"'</code>' \
+            '⏱️ <b>Total time</b> <code>'"$(format_time "$TOTAL_SECONDS")"'</code>' \
+            '📊 <b>Stages done</b> <code>'"$DONE_COUNT"'</code>' \
+            '🔢 <b>MD5</b>        <code>'"$(escape_html "$MD5")"'</code>' \
+            '' \
+            '🧭 <b>PIPELINE HISTORY</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            "${STAGES_INFO}" \
+            '' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+          if [ -n "$MODEL" ]; then
+            TEXT="${TEXT}\n📱 <b>Model</b>      <code>$(escape_html "$MODEL")</code>"
+          fi
+
           if [ "${{ job.status }}" != "success" ]; then
-            DETAILS=$'\n\n🔍 <b>FAILURE ANALYSIS</b>\n'
+            TEXT="${TEXT}\n\n🚨 <b>FAILURE ANALYSIS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             if [ -n "$FAILED_STAGE" ]; then
-              DETAILS="${DETAILS}📍 Stage: <code>$(escape_html "$FAILED_STAGE")</code>"$'\n'
+              TEXT="${TEXT}\n📍 <b>Stage</b>   <code>$(escape_html "$FAILED_STAGE")</code>"
             fi
             if [ -n "$FAILURE_REASON" ]; then
-              DETAILS="${DETAILS}🏷️ Class: <code>$(escape_html "$FAILURE_REASON")</code>"$'\n'
+              TEXT="${TEXT}\n🏷️ <b>Class</b>   <code>$(escape_html "$FAILURE_REASON")</code>"
             fi
             if [ -n "$LAST_ERRORS" ]; then
               TRUNCATED_ERRORS=$(echo "$LAST_ERRORS" | while read -r line; do
-                if [ "${#line}" -gt 150 ]; then
-                  echo "${line:0:150}..."
+                if [ "${#line}" -gt 140 ]; then
+                  echo "${line:0:140}..."
                 else
                   echo "$line"
                 fi
               done)
-              DETAILS="${DETAILS}"$'\n'"💥 <b>Last errors:</b>"$'\n'"<pre>$(escape_html "$TRUNCATED_ERRORS")</pre>"
+              TEXT="${TEXT}\n\n💥 <b>Last errors</b>\n<pre>$(escape_html "$TRUNCATED_ERRORS")</pre>"
             fi
-            if [ -z "$FAILED_STAGE" ] && [ -z "$FAILURE_REASON" ] && [ -z "$LAST_ERRORS" ]; then
-              DETAILS="${DETAILS}⚠️ Unknown failure — check logs."
-            fi
-          fi
-
-          SUCCESS_LINKS=""
-          if [ "${{ job.status }}" = "success" ]; then
-            SUCCESS_LINKS=$'\n\n📦 <b>DOWNLOADS</b>\n'
-            SUCCESS_LINKS="${SUCCESS_LINKS}🔹 <a href=\"${RELEASE_URL}\">GitHub Release</a>"$'\n'
+          else
+            TEXT="${TEXT}\n\n📦 <b>DOWNLOADS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔹 <a href=\"${RELEASE_URL}\">GitHub Release</a>"
             if [ -n "${OSHI_LINK:-}" ]; then
-              SUCCESS_LINKS="${SUCCESS_LINKS}☁️ <a href=\"${OSHI_LINK}\">oshi.at</a>"$'\n'
+              TEXT="${TEXT}\n☁️ <a href=\"${OSHI_LINK}\">oshi.at mirror</a>"
             fi
             if [ -n "${GOFILE_LINK:-}" ]; then
-              SUCCESS_LINKS="${SUCCESS_LINKS}☁️ <a href=\"${GOFILE_LINK}\">Gofile</a>"$'\n'
+              TEXT="${TEXT}\n☁️ <a href=\"${GOFILE_LINK}\">Gofile mirror</a>"
             fi
+            TEXT="${TEXT}\n\n✨ <i>Build completed successfully.</i>"
           fi
 
-          MODEL_LINE=""
-          if [ -n "$MODEL" ]; then
-            MODEL_LINE="📱 Model: <code>$(escape_html "$MODEL")</code>"$'\n'
-          fi
+          TEXT="${TEXT}\n\n🔗 <a href=\"${LOG_URL}\">Open GitHub Actions Logs</a>"
 
-          TEXT=$(printf '%s' '🦊 <b>MKVenomPro OrangeFox Builder</b>\n\n'"$STATUS"' — <code>'"$TOTAL_TIME_STR"'</code>\n\n🏷️ Brand: <code>'"$(escape_html "$BRAND")"'</code>\n📱 Device: <code>'"$(escape_html "$DEVICE")"'</code>\n'"$MODEL_LINE"'🌿 OrangeFox: <code>'"$(escape_html "$FOX_BRANCH")"'</code>\n🎯 Target: <code>'"$(escape_html "$TARGET")"'</code>\n🔢 MD5: <code>'"$(escape_html "$MD5")"'</code>\n🖥 Runner: <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>\n👤 Maintainer: <code>'"$(escape_html "$OF_MAINTAINER")"'</code>'"$STAGES_INFO"''"$DETAILS"''"$SUCCESS_LINKS"''$'\n\n''🔗 <a href="'"$LOG_URL"'">Build Logs</a>')
+          if [ "${#TEXT}" -gt 3900 ]; then
+            TEXT="${TEXT:0:3800}\n\n⚠️ <i>Message trimmed to fit Telegram.</i>\n🔗 <a href=\"${LOG_URL}\">Full logs</a>"
+          fi
 
           SEND_OK=false
 
