@@ -611,6 +611,40 @@ jobs:
             exit 1
           fi
 
+          # --- Detect if the repo is PRIVATE so we can authenticate the clone with the token ---
+          REPO_PRIVATE="false"
+          if [ -n "${GT_TOKEN:-}" ]; then
+            REPO_META=$(curl -sS -f \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GT_TOKEN}" \
+              "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}" 2>/dev/null) || REPO_META=""
+            REPO_PRIVATE=$(echo "$REPO_META" | jq -r '.private // "false"' 2>/dev/null || echo "false")
+          fi
+          echo "Repository '${REPO_OWNER}/${REPO_NAME}' private: ${REPO_PRIVATE}"
+
+          # --- Build the clone URL; inject the token when the repo is private ---
+          if [ "$REPO_PRIVATE" = "true" ]; then
+            if [ -z "${GT_TOKEN:-}" ]; then
+              echo "::error::'$REPO_OWNER/$REPO_NAME' is PRIVATE but no GT_TOKEN secret is set."
+              echo "::error::Add the GT_TOKEN secret with repo access, then rerun."
+              "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+              exit 1
+            fi
+            # Strip any protocol/credentials and rebuild an authenticated https URL.
+            CLONE_BASE="${DT_URL}"
+            case "$CLONE_BASE" in
+              http://*|https://*) ;;
+              git@github.com:*)  CLONE_BASE="https://github.com/${CLONE_BASE#*github.com:}" ;;
+            esac
+            CLONE_BASE="${CLONE_BASE##*://}"       # remove scheme
+            CLONE_BASE="${CLONE_BASE#*@}"          # remove any user:token@ already present
+            CLONE_BASE="${CLONE_BASE%/}"
+            CLONE_URL="https://x-access-token:${GT_TOKEN}@${CLONE_BASE}"
+            echo "Using authenticated clone URL (private repo)."
+          else
+            CLONE_URL="$DT_URL"
+          fi
+
           BRANCH_FOUND=0
           BRANCHES=$(curl -sS -f \
             ${GT_TOKEN:+-H "Authorization: Bearer ${GT_TOKEN}"} \
@@ -629,10 +663,10 @@ jobs:
 
           rm -rf device_tree_staging
 
-          if ! git clone --depth=1 --single-branch --branch "$DT_BRANCH" "$DT_URL" device_tree_staging 2>&1; then
+          if ! git clone --depth=1 --single-branch --branch "$DT_BRANCH" "$CLONE_URL" device_tree_staging 2>&1; then
             echo "::error::git clone failed."
-            echo "::error::Repo: $DT_URL, Branch: $DT_BRANCH"
-            echo "::error::Double-check the branch name and that the repo is public (or GT_TOKEN has access)."
+            echo "::error::Repo: $REPO_OWNER/$REPO_NAME, Branch: $DT_BRANCH"
+            echo "::error::Double-check the branch name and that the repo is public or that GT_TOKEN has access to it."
             "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
             exit 1
           fi
