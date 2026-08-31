@@ -853,12 +853,12 @@ jobs:
 
           mkdir -p "$LIBBLKID_DIR/src"
           if [ ! -f "$LIBBLKID_DIR/src/config.h" ]; then
-            cat > "$LIBBLKID_DIR/src/config.h" <<'EOF'
-#define HAVE_ERR_H 1
-#define HAVE_MEMPCPY 1
-#define HAVE_FSYNC 1
-#define HAVE_LOFF_T 1
-EOF
+            printf '%s\n' \
+              '#define HAVE_ERR_H 1' \
+              '#define HAVE_MEMPCPY 1' \
+              '#define HAVE_FSYNC 1' \
+              '#define HAVE_LOFF_T 1' \
+              > "$LIBBLKID_DIR/src/config.h"
             echo "✅ libblkid config.h generated."
           fi
 
