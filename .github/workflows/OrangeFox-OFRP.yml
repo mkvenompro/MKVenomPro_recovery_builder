@@ -1,4 +1,4 @@
-name: 🦊 OrangeFox Builder
+name: 🦊 OrangeFox OFRP Builder
 
 on:
   workflow_dispatch:

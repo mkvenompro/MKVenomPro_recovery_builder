@@ -1,0 +1,1587 @@
+name: 🧡 TWRP Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      TWRP_MANIFEST_BRANCH:
+        description: "TWRP Manifest Branch"
+        required: true
+        type: choice
+        default: "twrp-12.1"
+        options:
+          - "twrp-12.1"
+          - "twrp-11"
+          - "twrp-10"
+          - "omni-9.0"
+          - "omni-8.1"
+          - "omni-7.1"
+          - "omni-6.0"
+
+      DT_REPO_URL:
+        description: "Custom Recovery Tree (public or private)"
+        required: true
+        type: string
+
+      DT_BRANCH:
+        description: "Custom Recovery Tree Branch"
+        required: true
+        default: "android-12.1"
+        type: string
+
+      BUILD_TARGET:
+        description: "Build Target"
+        required: true
+        type: choice
+        default: "vendorbootimage"
+        options:
+          - "vendorbootimage"
+          - "recoveryimage"
+          - "bootimage"
+
+      USE_LATEST_MAGISK:
+        description: "Bundle latest Magisk zip?"
+        required: true
+        type: boolean
+        default: true
+
+      UPLOAD_RESULTS:
+        description: "Upload result to GitHub Release?"
+        required: true
+        type: boolean
+        default: true
+
+      LDCHECK:
+        description: "Run LDCHECK"
+        required: false
+        type: boolean
+        default: false
+
+      LDCHECKPATH:
+        description: "Blob path for LDCHECK"
+        required: false
+        default: "system/bin/qseecomd"
+        type: string
+
+      RUNNER_TYPE:
+        description: "Runner"
+        required: true
+        type: choice
+        default: "github"
+        options:
+          - "github"
+          - "self-hosted"
+
+      SELF_HOSTED_LABEL:
+        description: "Self-hosted runner label"
+        required: false
+        default: "self-hosted"
+        type: string
+
+      CCACHE_SIZE:
+        description: "ccache max size"
+        required: true
+        type: choice
+        default: "50G"
+        options:
+          - "20G"
+          - "50G"
+          - "80G"
+          - "100G"
+          - "150G"
+          - "200G"
+
+      REPO_SYNC_JOBS:
+        description: "repo sync jobs"
+        required: true
+        type: choice
+        default: "2"
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+
+      SWAP_SIZE:
+        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 12 GB."
+        required: false
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "8"
+          - "12"
+          - "16"
+          - "32"
+          - "64"
+          - "128"
+          - "200"
+
+      EXTRA_CMD:
+        description: "Extra exports before lunch (optional, e.g. TWRP_DEVICE_VERSION=...)"
+        required: false
+        type: string
+
+jobs:
+  build:
+    name: "🧡 twrp_${{ inputs.TWRP_MANIFEST_BRANCH }}"
+
+    runs-on: ${{ inputs.RUNNER_TYPE == 'self-hosted' && inputs.SELF_HOSTED_LABEL || 'ubuntu-22.04' }}
+
+    timeout-minutes: 720
+
+    permissions:
+      contents: write
+
+    env:
+      GT_TOKEN: ${{ secrets.GT_TOKEN }}
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      MAINTAINER: ${{ github.actor }}
+      TARGET: ${{ inputs.BUILD_TARGET }}
+      REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
+      JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # INITIALIZE STATE + HELPERS
+      # ============================================================
+      - name: Initialize build state and helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          STATE_DIR="${RUNNER_TEMP}/mkvenompro-build-state"
+          mkdir -p "$STATE_DIR"
+          echo "STATE_DIR=$STATE_DIR" >> "$GITHUB_ENV"
+
+          date +%s > "$STATE_DIR/build_start"
+          : > "$STATE_DIR/completed_stages"
+          : > "$STATE_DIR/failure_reason"
+          : > "$STATE_DIR/build.log"
+
+          echo "Initializing" > "$STATE_DIR/current_stage"
+          date +%s > "$STATE_DIR/current_stage_start"
+
+          cat > "$STATE_DIR/stage_start.sh" <<'STAGESTART'
+          #!/usr/bin/env bash
+          set +u
+          STAGE="${1:-Unknown}"
+          NOW="$(date +%s)"
+          echo "$STAGE" > "$STATE_DIR/current_stage"
+          echo "$NOW" > "$STATE_DIR/current_stage_start"
+          echo
+          echo "========================================"
+          echo "🔵 STAGE: $STAGE"
+          echo "🕐 Started: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "========================================"
+          STAGESTART
+
+          cat > "$STATE_DIR/stage_end.sh" <<'STAGEEND'
+          #!/usr/bin/env bash
+          set +u
+          STAGE="${1:-Unknown}"
+          STATUS="${2:-success}"
+          NOW="$(date +%s)"
+          START="$(cat "$STATE_DIR/current_stage_start" 2>/dev/null || echo "$NOW")"
+          ELAPSED=$((NOW - START))
+          echo "${STAGE}|${STATUS}|${ELAPSED}" >> "$STATE_DIR/completed_stages"
+          if [ "$STATUS" = "success" ]; then
+            echo "🟢 STAGE COMPLETE: $STAGE"
+            echo "⏱️ Duration: ${ELAPSED}s"
+          else
+            echo "🔴 STAGE FAILED: $STAGE"
+            echo "⏱️ Duration: ${ELAPSED}s"
+            echo "$STAGE" > "$STATE_DIR/failed_stage"
+          fi
+          STAGEEND
+
+          cat > "$STATE_DIR/tg_escape.sh" <<'TGESCAPE'
+          #!/usr/bin/env bash
+          printf '%s' "${1:-}" |
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+          TGESCAPE
+
+          chmod +x "$STATE_DIR/stage_start.sh" "$STATE_DIR/stage_end.sh" "$STATE_DIR/tg_escape.sh"
+
+          test -x "$STATE_DIR/stage_start.sh"
+          test -x "$STATE_DIR/stage_end.sh"
+          test -x "$STATE_DIR/tg_escape.sh"
+
+          echo
+          echo "========================================"
+          echo "🟢 BUILD STATE INITIALIZED"
+          echo "STATE_DIR: $STATE_DIR"
+          echo "========================================"
+
+      # ============================================================
+      # DISPLAY INPUTS
+      # ============================================================
+      - name: Display inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "========================================"
+          echo "       MKVenomPro TWRP CI"
+          echo "========================================"
+          echo "TWRP Manifest   : ${{ inputs.TWRP_MANIFEST_BRANCH }}"
+          echo "Target          : ${{ inputs.BUILD_TARGET }}"
+          echo "Device tree     : ${{ inputs.DT_REPO_URL }}"
+          echo "Tree branch     : ${{ inputs.DT_BRANCH }}"
+          echo "Magisk          : ${{ inputs.USE_LATEST_MAGISK }}"
+          echo "ccache size     : ${{ inputs.CCACHE_SIZE }}"
+          echo "Upload          : ${{ inputs.UPLOAD_RESULTS }}"
+          echo "LDCheck         : ${{ inputs.LDCHECK }}"
+          echo "LDCheck path    : ${{ inputs.LDCHECKPATH }}"
+          echo "Runner          : ${{ inputs.RUNNER_TYPE }}"
+          echo "Self-host label : ${{ inputs.SELF_HOSTED_LABEL }}"
+          echo "Swap size       : ${{ inputs.SWAP_SIZE }} GB"
+          echo "Sync jobs       : ${{ inputs.REPO_SYNC_JOBS }}"
+          echo "Extra cmd       : ${{ inputs.EXTRA_CMD }}"
+          echo "Maintainer      : ${{ github.actor }}"
+          echo "========================================"
+
+      # ============================================================
+      # PARSE INPUTS
+      # ============================================================
+      - name: Parse inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SYNC_BRANCH="${{ inputs.TWRP_MANIFEST_BRANCH }}"
+          TWRP_BRANCH="$SYNC_BRANCH"
+          BRANCH_INT="${SYNC_BRANCH#twrp-}"
+          BRANCH_INT="${BRANCH_INT#omni-}"
+          BRANCH_INT="${BRANCH_INT%%.*}"
+          SYNC_PATH="${GITHUB_WORKSPACE}/twrp/${TWRP_BRANCH}"
+
+          {
+            echo "TWRP_BRANCH=$TWRP_BRANCH"
+            echo "SYNC_BRANCH=$SYNC_BRANCH"
+            echo "BRANCH_INT=$BRANCH_INT"
+            echo "SYNC_PATH=$SYNC_PATH"
+          } >> "$GITHUB_ENV"
+
+          echo "TWRP_BRANCH=$TWRP_BRANCH"
+          echo "SYNC_PATH=$SYNC_PATH"
+
+      # ============================================================
+      # VALIDATE RUNNER
+      # ============================================================
+      - name: Validate runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Validate runner"
+
+          echo "Hostname: $(hostname || true)"
+          echo "CPU: $(nproc || true)"
+          echo "Memory: $(free -h || true)"
+          echo "Disk: $(df -h / || true)"
+          echo "Workspace: $(df -h "$GITHUB_WORKSPACE" || true)"
+          echo "Runner: ${{ inputs.RUNNER_TYPE }}"
+          echo "Sync jobs: $REPO_SYNC_JOBS"
+
+          if ! [[ "$REPO_SYNC_JOBS" =~ ^[1-4]$ ]]; then
+            echo "::error::REPO_SYNC_JOBS must be 1-4."
+            "$STATE_DIR/stage_end.sh" "Validate runner" failure
+            exit 1
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Validate runner" success
+
+      # ============================================================
+      # GITHUB HOSTED CLEANUP
+      # ============================================================
+      - name: Clean GitHub-hosted runner
+        if: inputs.RUNNER_TYPE != 'self-hosted'
+        uses: rokibhasansagar/slimhub_actions@main
+
+      # ============================================================
+      # SWAP (GitHub OR Self-hosted if requested)
+      # ============================================================
+      - name: Add swap space
+        if: inputs.RUNNER_TYPE != 'self-hosted' || inputs.SWAP_SIZE != '0'
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 12 || inputs.SWAP_SIZE }}
+
+      # ============================================================
+      # BUILD ENVIRONMENT
+      # ============================================================
+      - name: Install build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Prepare environment"
+
+          sudo apt-get update -qq 2>&1 | tee -a "$STATE_DIR/build.log"
+
+          sudo apt-get install -y \
+            aria2 jq curl wget git ccache patchelf cpio lz4 unzip rsync \
+            bc bison flex gperf build-essential zip python3 python3-pip \
+            libssl-dev libelf-dev libxml2-utils xsltproc \
+            2>&1 | tee -a "$STATE_DIR/build.log"
+
+          # General AOSP/TWRP build environment (OpenJDK 11/17, 32-bit libs, etc.)
+          sudo apt-get install -y \
+            openjdk-11-jdk openjdk-17-jdk \
+            libncurses5 libncursesw5 python2 python-is-python3 \
+            m4 squashfs-tools schedtool lib32stdc++6 lib32z1 \
+            2>&1 | tee -a "$STATE_DIR/build.log" || true
+
+          # repo tool (Google's recommended way)
+          if ! command -v repo >/dev/null 2>&1; then
+            mkdir -p "$HOME/bin"
+            curl -sSf https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+            chmod a+x "$HOME/bin/repo"
+            echo "$HOME/bin" >> "$GITHUB_PATH"
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Prepare environment" success
+
+      # ============================================================
+      # CCACHE
+      # ============================================================
+      - name: Configure ccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Configure ccache"
+
+          # Cache placement, learned from TheGreatEclipse/recovery_spinel_tree:
+          # put ccache somewhere cleanly writable OUTSIDE the GITHUB_WORKSPACE first
+          # (/tmp is what the reference builder uses). On some self-hosted runners
+          # the workspace volume can go read-only mid-build even when the disk has
+          # plenty of space, which surfaces as "ccache: error: Read-only file
+          # system". We probe each candidate for real read/write and pick the first
+          # that works, so ccache stays ENABLED.
+          CCACHE_SELECTED=""
+          for cand in "/tmp/ccache" "$RUNNER_TEMP/ccache" "${GITHUB_WORKSPACE}/.ccache"; do
+            mkdir -p "$cand" 2>/dev/null || continue
+            if touch "$cand/.rw-probe" 2>/dev/null; then
+              rm -f "$cand/.rw-probe"
+              CCACHE_SELECTED="$cand"
+              break
+            fi
+          done
+          if [ -z "$CCACHE_SELECTED" ]; then
+            echo "::error::No writable directory found for ccache."
+            "$STATE_DIR/stage_end.sh" "Configure ccache" failure
+            exit 1
+          fi
+
+          rm -rf "$CCACHE_SELECTED"
+          mkdir -p "$CCACHE_SELECTED"
+
+          # ccache temp dir MUST stay on the same writable filesystem as CCACHE_DIR.
+          SAFE_TMPDIR="$CCACHE_SELECTED/.tmp"
+          mkdir -p "$SAFE_TMPDIR"
+
+          {
+            echo "CCACHE_DIR=$CCACHE_SELECTED"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+            echo "CCACHE_NOHASHDIR=true"
+            echo "CCACHE_TEMPDIR=$SAFE_TMPDIR"
+            echo "CCACHE_COMPRESS=1"
+            echo "TMPDIR=$SAFE_TMPDIR"
+          } >> "$GITHUB_ENV"
+
+          # Cap ccache to available disk so it never fills the disk (the disk is
+          # usually large; this is a safety net, not the cause of the crash).
+          SET_SIZE="${{ inputs.CCACHE_SIZE }}"
+          case "$SET_SIZE" in
+            20G)  EFFECTIVE_SIZE="8G" ;;
+            50G)  EFFECTIVE_SIZE="10G" ;;
+            80G)  EFFECTIVE_SIZE="12G" ;;
+            100G) EFFECTIVE_SIZE="12G" ;;
+            150G) EFFECTIVE_SIZE="12G" ;;
+            200G) EFFECTIVE_SIZE="12G" ;;
+            *)    EFFECTIVE_SIZE="10G" ;;
+          esac
+
+          echo "Effective ccache size: $EFFECTIVE_SIZE"
+          ccache -o enable 2>/dev/null || true
+          ccache -M "$EFFECTIVE_SIZE" 2>/dev/null || true
+          echo "CCACHE_DISABLE=0" >> "$GITHUB_ENV"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR: $CCACHE_SELECTED"
+          echo "TMPDIR: $SAFE_TMPDIR"
+          ccache -s || true
+
+          "$STATE_DIR/stage_end.sh" "Configure ccache" success
+
+      # ============================================================
+      # CCACHE RESTORE
+      # ============================================================
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          # Key on the branch (the device tree is cloned mid-run, so
+          # hashFiles('**/BoardConfig.mk') was empty here — that's what produced
+          # the broken "ccache-v2-Linux-12.1-" key / repeated cache-misses).
+          key: ccache-v2-${{ runner.os }}-${{ inputs.TWRP_MANIFEST_BRANCH }}-
+          restore-keys: |
+            ccache-v2-${{ runner.os }}-${{ inputs.TWRP_MANIFEST_BRANCH }}-
+            ccache-v2-${{ runner.os }}-
+
+      # ============================================================
+      # CCACHE PERMISSION REPAIR
+      # ============================================================
+      - name: Repair ccache directory permissions
+        shell: bash
+        run: |
+          set -uo pipefail
+          # actions/cache restores cached files as READ-ONLY (0444).
+          # ccache refuses to write locks/index into a read-only tree (EROFS).
+          # Force every file/dir writable BEFORE the build; purge if that is impossible.
+          if [ -n "${CCACHE_DIR:-}" ] && [ -d "$CCACHE_DIR" ]; then
+            echo "Repairing ccache permissions..."
+            chmod -R u+rwX,go-w "$CCACHE_DIR" 2>/dev/null || true
+            chown -R "$(whoami):$(whoami)" "$CCACHE_DIR" 2>/dev/null || true
+            TEST="$CCACHE_DIR/.repair-write-test"
+            if touch "$TEST" 2>/dev/null; then
+              rm -f "$TEST"
+              chmod -w "$CCACHE_DIR/.repair-write-test" 2>/dev/null || true
+              echo "✅ CCACHE_DIR writable."
+            else
+              echo "::warning::Still not writable — clearing and recreating."
+              rm -rf "${CCACHE_DIR:?}"
+              mkdir -p "$CCACHE_DIR"
+            fi
+          fi
+          # Give soong/ccache a guaranteed writable scratch dir (not RUNNER_TEMP).
+          mkdir -p "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
+          chmod -R u+rwX "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
+
+      # ============================================================
+      # GIT AUTHENTICATION
+      # ============================================================
+      - name: Configure git authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Configure git"
+
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git config --global color.ui false
+          git config --global http.version HTTP/1.1
+          git config --global http.postBuffer 524288000
+          git config --global http.maxRequestBuffer 100M
+          git config --global fetch.parallel 4
+
+          if [ -n "${GT_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Configure git" success
+
+      # ============================================================
+      # TWRP SOURCE SYNC
+      # ============================================================
+      - name: Init + Sync TWRP sources
+        shell: bash
+        run: |
+          set +e
+          "$STATE_DIR/stage_start.sh" "Sync TWRP sources"
+
+          if [ -n "${GT_TOKEN:-}" ]; then
+            git config --global url."https://x-access-token:${GT_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+          mkdir -p "$SYNC_PATH"
+          cd "$SYNC_PATH"
+
+          SYNC_LOG="$STATE_DIR/sync.log"
+          : > "$SYNC_LOG"
+
+          echo "Manifest branch: $SYNC_BRANCH" | tee -a "$SYNC_LOG"
+          echo "Jobs: $REPO_SYNC_JOBS" | tee -a "$SYNC_LOG"
+
+          # Determine manifest for the chosen branch.
+          # twrp-* / omni-* map to the AOSP/omni minimal manifests.
+          MANIFEST_MAJOR="${BRANCH_INT%%.*}"
+          case "$MANIFEST_MAJOR" in
+            12|11|10|13|14)
+              MANIFEST_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git"
+              ;;
+            9|8|7|6)
+              MANIFEST_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git"
+              ;;
+            *)
+              MANIFEST_URL="https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git"
+              ;;
+          esac
+          echo "Manifest URL: $MANIFEST_URL" | tee -a "$SYNC_LOG"
+
+          export REPO_CACHE_DIR="$SYNC_PATH/.repo"
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$SYNC_BRANCH" 2>&1 | tee -a "$SYNC_LOG"
+          INIT_STATUS=${PIPESTATUS[0]}
+
+          if [ "$INIT_STATUS" -ne 0 ]; then
+            echo "::error::repo init failed."
+            echo "SYNC" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Sync TWRP sources" failure
+            exit 1
+          fi
+
+          repo sync -c -j"$REPO_SYNC_JOBS" --force-sync --no-clone-bundle --no-tags 2>&1 | tee -a "$SYNC_LOG"
+          SYNC_STATUS=${PIPESTATUS[0]}
+
+          if [ "$SYNC_STATUS" -ne 0 ]; then
+            echo "⚠️ Initial sync failed — retrying with -j1..."
+            repo sync -j1 --force-sync -c --no-clone-bundle --no-tags 2>&1 | tee -a "$SYNC_LOG"
+            SYNC_STATUS=${PIPESTATUS[0]}
+          fi
+
+          if [ "$SYNC_STATUS" -ne 0 ]; then
+            echo "SYNC" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Sync TWRP sources" failure
+            exit 1
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Sync TWRP sources" success
+
+      # ============================================================
+      # CLONE DEVICE TREE — FRESH EVERY TIME
+      # ============================================================
+      - name: Clone device tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Clone Device Tree"
+
+          cd "$SYNC_PATH"
+
+          DT_URL="${{ inputs.DT_REPO_URL }}"
+          DT_BRANCH="${{ inputs.DT_BRANCH }}"
+
+          # --- Validate inputs up front (clear errors instead of cryptic clone failures) ---
+          if [ -z "$DT_URL" ] || [ "$DT_URL" = "null" ]; then
+            echo "::error::DT_REPO_URL is empty. Provide a full repo URL, e.g. https://github.com/OWNER/android_device_XIAOMI_DEVICE"
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+          if [ -z "$DT_BRANCH" ] || [ "$DT_BRANCH" = "null" ]; then
+            echo "::error::DT_BRANCH is empty."
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+
+          # Normalize: strip trailing slashes and ".git"
+          DT_URL="${DT_URL%/}"
+          DT_URL="${DT_URL%.git}"
+          echo "Cloning device tree: $DT_URL  (branch: $DT_BRANCH)"
+
+          # --- Resolve the canonical OWNER/REPO (strip proto + trailing junk) ---
+          REPO_PATH="$DT_URL"
+          case "$REPO_PATH" in
+            http://*|https://*) REPO_PATH="${REPO_PATH#*//github.com/}" ;;
+            git@github.com:*)  REPO_PATH="${REPO_PATH#*github.com:}" ;;
+            ssh://*@github.com/*) REPO_PATH="${REPO_PATH#*@github.com/}" ;;
+          esac
+          REPO_PATH="${REPO_PATH#/}"
+          # If there are extra leading segments (e.g. a mistaken user prefix), reduce to OWNER/REPO
+          while [ "$(echo "$REPO_PATH" | tr '/' '\n' | wc -l)" -gt 2 ]; do
+            REPO_PATH="${REPO_PATH#*/}"
+          done
+          REPO_NAME="${REPO_PATH##*/}"
+          REPO_OWNER="${REPO_PATH%%/*}"
+
+          echo "Canonical repo owner/name: $REPO_OWNER/$REPO_NAME"
+
+          # --- Verify the repo + branch exist BEFORE cloning (clear messages) ---
+          HTTP_CODE="000"
+          if [ -n "${GT_TOKEN:-}" ]; then
+            echo "Verifying repository via GitHub API..."
+            HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GT_TOKEN}" \
+              "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}" 2>/dev/null) || HTTP_CODE="000"
+          else
+            HTTP_CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+              "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}" 2>/dev/null) || HTTP_CODE="000"
+          fi
+
+          if [ "$HTTP_CODE" = "000" ]; then
+            echo "::error::Could not reach GitHub API (network/SSL failure)."
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+          if [ "$HTTP_CODE" = "404" ]; then
+            echo "::error::Repository '$REPO_OWNER/$REPO_NAME' was not found (HTTP 404)."
+            echo "::error::Check DT_REPO_URL. Did you type the owner correctly (e.g. mkvenompro, not mkpromvp)?"
+            echo "::error::For spinel the repo is: https://github.com/mkvenompro/android_device_xiaomi_spinel"
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+          if [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            echo "::error::GitHub API returned $HTTP_CODE (auth/rate limit). Set the GT_TOKEN secret correctly."
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+
+          # --- Detect if the repo is PRIVATE so we can authenticate the clone with the token ---
+          REPO_PRIVATE="false"
+          if [ -n "${GT_TOKEN:-}" ]; then
+            REPO_META=$(curl -sS -f \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GT_TOKEN}" \
+              "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}" 2>/dev/null) || REPO_META=""
+            REPO_PRIVATE=$(echo "$REPO_META" | jq -r '.private // "false"' 2>/dev/null || echo "false")
+          fi
+          echo "Repository '${REPO_OWNER}/${REPO_NAME}' private: ${REPO_PRIVATE}"
+
+          # --- Build the clone URL; inject the token when the repo is private ---
+          if [ "$REPO_PRIVATE" = "true" ]; then
+            if [ -z "${GT_TOKEN:-}" ]; then
+              echo "::error::'$REPO_OWNER/$REPO_NAME' is PRIVATE but no GT_TOKEN secret is set."
+              echo "::error::Add the GT_TOKEN secret with repo access, then rerun."
+              "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+              exit 1
+            fi
+            # Strip any protocol/credentials and rebuild an authenticated https URL.
+            CLONE_BASE="${DT_URL}"
+            case "$CLONE_BASE" in
+              http://*|https://*) ;;
+              git@github.com:*)  CLONE_BASE="https://github.com/${CLONE_BASE#*github.com:}" ;;
+            esac
+            CLONE_BASE="${CLONE_BASE##*://}"       # remove scheme
+            CLONE_BASE="${CLONE_BASE#*@}"          # remove any user:token@ already present
+            CLONE_BASE="${CLONE_BASE%/}"
+            CLONE_URL="https://x-access-token:${GT_TOKEN}@${CLONE_BASE}"
+            echo "Using authenticated clone URL (private repo)."
+          else
+            CLONE_URL="$DT_URL"
+          fi
+
+          BRANCH_FOUND=0
+          BRANCHES=$(curl -sS -f \
+            ${GT_TOKEN:+-H "Authorization: Bearer ${GT_TOKEN}"} \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/branches?per_page=100" 2>/dev/null) || BRANCHES=""
+          if echo "$BRANCHES" | grep -q "\"name\": \"${DT_BRANCH}\""; then
+            BRANCH_FOUND=1
+          fi
+          if [ "$BRANCH_FOUND" = "0" ]; then
+            echo "::error::Branch '$DT_BRANCH' does not exist in $REPO_OWNER/$REPO_NAME."
+            AVAILABLE=$(echo "$BRANCHES" | jq -r '.[].name' 2>/dev/null | tr '\n' ' ') || AVAILABLE="none"
+            echo "::error::Available branches: ${AVAILABLE:-none}"
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+
+          rm -rf device_tree_staging
+
+          if ! git clone --depth=1 --single-branch --branch "$DT_BRANCH" "$CLONE_URL" device_tree_staging 2>&1; then
+            echo "::error::git clone failed."
+            echo "::error::Repo: $REPO_OWNER/$REPO_NAME, Branch: $DT_BRANCH"
+            echo "::error::Double-check the branch name and that the repo is public or that GT_TOKEN has access to it."
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+
+          STAGING_PATH="$SYNC_PATH/device_tree_staging"
+          cd "$STAGING_PATH"
+
+          DEVICE_MAKEFILE=""
+          DEVICE_DIRECTORY=""
+          DEVICE_NAME=""
+          DEVICE_BRAND=""
+          DEVICE_MANUFACTURER=""
+          DEVICE_MODEL=""
+
+          extract_val() {  # usage: extract_val <file> <multiline sed expr>
+            sed -n "$2" "$1" | head -n1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+          }
+
+          for file in *.mk; do
+            [ -f "$file" ] || continue
+            P_NAME="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_NAME[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            P_BRAND="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_BRAND[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            P_DEVICE="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_DEVICE[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            P_MODEL="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_MODEL[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            P_MANUF="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_MANUFACTURER[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            P_DEV_FOR_ATTEST="$(extract_val "$file" 's/^[[:space:]]*PRODUCT_DEVICE_FOR_ATTESTATION[[:space:]]*:=[[:space:]]*\(.*\)/\1/p')"
+            if [ -n "$P_NAME" ] && [ -n "$P_DEVICE" ]; then
+              DEVICE_MAKEFILE="$file"
+              DEVICE_NAME="$P_DEVICE"
+              DEVICE_BRAND="$P_BRAND"
+              DEVICE_MANUFACTURER="$P_MANUF"
+              DEVICE_MODEL="$P_MODEL"
+              [ -z "$DEVICE_MANUFACTURER" ] && DEVICE_MANUFACTURER="$P_DEV_FOR_ATTEST"
+              break
+            fi
+          done
+
+          if [ -z "$DEVICE_NAME" ]; then
+            while IFS= read -r -d '' file; do
+              getval() { grep -m1 "^[[:space:]]*$1[[:space:]]*:=[[:space:]]*" "$file" | sed 's/.*:=[[:space:]]*//' | tr -d '[:space:]' || true; }
+              P_NAME="$(getval PRODUCT_NAME)"
+              P_BRAND="$(getval PRODUCT_BRAND)"
+              P_DEVICE="$(getval PRODUCT_DEVICE)"
+              P_MODEL="$(getval PRODUCT_MODEL)"
+              P_MANUF="$(getval PRODUCT_MANUFACTURER)"
+              if [ -n "$P_NAME" ] && [ -n "$P_DEVICE" ]; then
+                DEVICE_MAKEFILE="$(basename "$file")"
+                DEVICE_NAME="$P_DEVICE"
+                DEVICE_BRAND="$P_BRAND"
+                DEVICE_MANUFACTURER="$P_MANUF"
+                DEVICE_MODEL="$P_MODEL"
+                break
+              fi
+            done < <(find . -maxdepth 3 -type f -name "*.mk" -print0)
+          fi
+
+          if [ -z "$DEVICE_NAME" ]; then
+            echo "::error::Could not detect device codename from tree."
+            echo "::error::The tree at $DT_URL must contain a .mk with PRODUCT_NAME/PRODUCT_DEVICE lines."
+            "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
+            exit 1
+          fi
+
+          # --- Canonical directory path: device/{manufacturer|brand|owner}/{device}, all lowercase ---
+          # Recovery trees expect device/<lowercase brand>/<device> (e.g. device/xiaomi/spinel).
+          DIR_BRAND="${DEVICE_MANUFACTURER:-$DEVICE_BRAND}"
+          [ -z "$DIR_BRAND" ] && DIR_BRAND="$REPO_OWNER"
+          DIR_BRAND_LOWER="$(echo "$DIR_BRAND" | tr '[:upper:]' '[:lower:]')"
+          DEVICE_DIRECTORY="device/$DIR_BRAND_LOWER"
+
+          mkdir -p "$SYNC_PATH/$DEVICE_DIRECTORY"
+          rm -rf "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+          mv "$STAGING_PATH" "$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+
+          TREE_PATH="$SYNC_PATH/$DEVICE_DIRECTORY/$DEVICE_NAME"
+          COMMIT_ID="$(git -C "$TREE_PATH" rev-parse HEAD)"
+
+          if [ -f "$TREE_PATH/BoardConfig.mk" ]; then
+            sed -i '/^[[:space:]]*BOARD_RAMDISK_USE_LZ4[[:space:]]*=/d' "$TREE_PATH/BoardConfig.mk" || true
+          fi
+
+          {
+            echo "DEVICE_NAME=$DEVICE_NAME"
+            echo "DEVICE_BRAND=$DEVICE_BRAND"
+            echo "DEVICE_MANUFACTURER=$DEVICE_MANUFACTURER"
+            echo "DEVICE_MODEL=$DEVICE_MODEL"
+            echo "DEVICE_DIRECTORY=$DEVICE_DIRECTORY"
+            echo "DEVICE_MAKEFILE=$DEVICE_MAKEFILE"
+            echo "DEVICE_TREE_PATH=$TREE_PATH"
+            echo "COMMIT_ID=$COMMIT_ID"
+          } >> "$GITHUB_ENV"
+
+          echo "========================================"
+          echo "Detected device"
+          echo "  Brand : $DEVICE_BRAND"
+          echo "  Mfr   : ${DEVICE_MANUFACTURER:-N/A}"
+          echo "  Model : ${DEVICE_MODEL:-N/A}"
+          echo "  Device: $DEVICE_NAME"
+          echo "  Path  : $DEVICE_DIRECTORY/$DEVICE_NAME"
+          echo "  Tree  : $DEVICE_MAKEFILE"
+          echo "  Commit: $COMMIT_ID"
+          echo "========================================"
+
+          "$STATE_DIR/stage_end.sh" "Clone Device Tree" success
+
+      # ============================================================
+      # TELEGRAM START (AFTER DEVICE IS KNOWN)
+      # ============================================================
+      - name: Telegram - build started
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram disabled."
+            exit 0
+          fi
+
+          if [ ! -x "$STATE_DIR/tg_escape.sh" ]; then
+            echo "Telegram helper missing."
+            exit 0
+          fi
+
+          escape_html() {
+            "$STATE_DIR/tg_escape.sh" "$1"
+          }
+
+          MODEL_LINE=""
+          if [ -n "${DEVICE_MODEL:-}" ]; then
+            MODEL_LINE="📱 <b>Model</b>  <code>$(escape_html "$DEVICE_MODEL")</code>"$'\n'
+          fi
+
+          TEXT=$(printf '%s\n' \
+            '🧡 <b>MKVenomPro • TWRP CI</b>' \
+            '' \
+            '╭────────────────────────────╮' \
+            '│ 🚀 <b>BUILD STARTED</b>             │' \
+            '│ ⚡ Initializing pipeline...    │' \
+            '╰────────────────────────────╯' \
+            '' \
+            '📦 <b>BUILD PROFILE</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🧡 <b>TWRP</b>  <code>'"$(escape_html "$TWRP_BRANCH")"'</code>' \
+            '🎯 <b>Target</b>    <code>'"$(escape_html "$TARGET")"'</code>' \
+            '🏷️ <b>Brand</b>     <code>'"$(escape_html "${DEVICE_BRAND:-unknown}")"'</code>' \
+            '📱 <b>Device</b>    <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>' \
+            "$MODEL_LINE" \
+            '🌲 <b>Tree</b>      <code>'"$(escape_html "${{ inputs.DT_REPO_URL }}")"'</code>' \
+            '🌱 <b>Branch</b>    <code>'"$(escape_html "${{ inputs.DT_BRANCH }}")"'</code>' \
+            '🖥 <b>Runner</b>    <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>' \
+            '⚙️ <b>Jobs</b>      <code>'"$(escape_html "$REPO_SYNC_JOBS")"'</code>' \
+            '👤 <b>Maintainer</b> <code>'"$(escape_html "$MAINTAINER")"'</code>' \
+            '' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🔵 <b>NOW</b>  <code>Preparing build</code>' \
+            '⏱️ <b>Stage timer</b>  <code>00s</code>' \
+            '' \
+            '🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Open GitHub Actions</a>')
+
+          RESPONSE=$(curl -sS \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -X POST \
+            "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode "text=${TEXT}" \
+            2>&1)
+
+          MESSAGE_ID=$(echo "$RESPONSE" | jq -r '.result.message_id // empty' 2>/dev/null)
+
+          if [ -n "$MESSAGE_ID" ]; then
+            echo "$MESSAGE_ID" > "$STATE_DIR/telegram_message_id"
+            echo "Telegram start notification sent."
+          else
+            echo "::warning::Telegram notification failed."
+            echo "$RESPONSE"
+          fi
+
+      # ============================================================
+      # TELEGRAM LIVE MONITOR
+      # ============================================================
+      - name: Start Telegram live monitor
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            exit 0
+          fi
+          if [ ! -f "$STATE_DIR/telegram_message_id" ]; then
+            exit 0
+          fi
+
+          (
+            while true; do
+              sleep 20
+              if [ -f "$STATE_DIR/stop_monitor" ]; then
+                break
+              fi
+
+              START=$(cat "$STATE_DIR/build_start" 2>/dev/null || date +%s)
+              NOW=$(date +%s)
+              TOTAL=$((NOW - START))
+
+              STAGE=$(cat "$STATE_DIR/current_stage" 2>/dev/null || echo "Initializing")
+              STAGE_START=$(cat "$STATE_DIR/current_stage_start" 2>/dev/null || echo "$NOW")
+              STAGE_TIME=$((NOW - STAGE_START))
+
+              format_time() {
+                local S="${1:-0}"
+                if [ "$S" -lt 60 ]; then
+                  printf "%02ds" "$S"
+                elif [ "$S" -lt 3600 ]; then
+                  printf "%02dm %02ds" "$((S / 60))" "$((S % 60))"
+                else
+                  printf "%02dh %02dm %02ds" "$((S / 3600))" "$(((S % 3600) / 60))" "$((S % 60))"
+                fi
+              }
+
+              escape_html() {
+                "$STATE_DIR/tg_escape.sh" "$1"
+              }
+
+              STAGE_LIST=""
+              DONE_COUNT=0
+              if [ -f "$STATE_DIR/completed_stages" ]; then
+                while IFS='|' read -r SNAME SSTATUS SELAPSED; do
+                  [ -z "$SNAME" ] && continue
+                  DONE_COUNT=$((DONE_COUNT + 1))
+                  SM=$((SELAPSED / 60))
+                  SS=$((SELAPSED % 60))
+                  if [ "$SSTATUS" = "success" ]; then
+                    STAGE_LIST="${STAGE_LIST}\n🟢 <code>$(escape_html "$SNAME")</code>  <i>${SM}m ${SS}s</i>"
+                  else
+                    STAGE_LIST="${STAGE_LIST}\n🔴 <code>$(escape_html "$SNAME")</code>  <i>${SM}m ${SS}s</i>"
+                  fi
+                done < "$STATE_DIR/completed_stages"
+              fi
+
+              if [ -z "$STAGE_LIST" ]; then
+                STAGE_LIST="\n⚪ <i>No completed stages yet</i>"
+              fi
+
+              TEXT=$(printf '%s\n' \
+                '🧡 <b>MKVenomPro • TWRP CI</b>' \
+                '' \
+                '╭────────────────────────────╮' \
+                '│ 🔵 <b>BUILDING</b>                 │' \
+                '│ ⚙️ Pipeline is running...      │' \
+                '╰────────────────────────────╯' \
+                '' \
+                '📦 <b>BUILD</b>' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '🧡 <b>TWRP</b>  <code>'"$(escape_html "$TWRP_BRANCH")"'</code>' \
+                '🎯 <b>Target</b>    <code>'"$(escape_html "$TARGET")"'</code>' \
+                '📱 <b>Device</b>    <code>'"$(escape_html "${DEVICE_NAME:-unknown}")"'</code>' \
+                '🖥 <b>Runner</b>    <code>'"$(escape_html "${{ inputs.RUNNER_TYPE }}")"'</code>' \
+                '' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '🔵 <b>CURRENT STAGE</b>' \
+                '🏗️ <code>'"$(escape_html "$STAGE")"'</code>' \
+                '⏱️ <b>Stage</b>  <code>'"$(format_time "$STAGE_TIME")"'</code>' \
+                '⏳ <b>Total</b>  <code>'"$(format_time "$TOTAL")"'</code>' \
+                '' \
+                '📊 <b>PIPELINE HISTORY</b>' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                "${STAGE_LIST}" \
+                '' \
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+                '📈 <b>Completed stages:</b> <code>'"$DONE_COUNT"'</code>' \
+                '🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Live GitHub Logs</a>')
+
+              # Telegram messages have a 4096-character limit. Keep the live dashboard compact.
+              if [ "${#TEXT}" -gt 3900 ]; then
+                TEXT="${TEXT:0:3850}\n\n⚠️ <i>History trimmed to fit Telegram.</i>"
+              fi
+
+              curl -sS \
+                --connect-timeout 5 \
+                --max-time 15 \
+                -X POST \
+                "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
+                -d "chat_id=${TG_CHAT_ID}" \
+                -d "message_id=$(cat "$STATE_DIR/telegram_message_id")" \
+                --data-urlencode "parse_mode=HTML" \
+                --data-urlencode "disable_web_page_preview=true" \
+                --data-urlencode "text=${TEXT}" \
+                >/dev/null 2>&1 || true
+            done
+          ) &
+
+          echo $! > "$STATE_DIR/telegram_monitor_pid"
+
+      # ============================================================
+      # DOWNLOAD MAGISK (aria2c + curl fallback)
+      # ============================================================
+      - name: Download latest Magisk
+        if: inputs.USE_LATEST_MAGISK == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Download Magisk"
+
+          mkdir -p "$HOME/Magisk"
+          cd "$HOME/Magisk"
+
+          API_HEADERS=(-H "Accept: application/vnd.github+json")
+          if [ -n "${GT_TOKEN:-}" ]; then
+            API_HEADERS+=(-H "Authorization: Bearer ${GT_TOKEN}")
+          fi
+
+          RESPONSE=$(curl -fsSL "${API_HEADERS[@]}" https://api.github.com/repos/topjohnwu/Magisk/releases/latest)
+
+          if ! echo "$RESPONSE" | jq -e '.assets' >/dev/null 2>&1; then
+            echo "::error::GitHub API did not return valid release."
+            echo "$RESPONSE" | head -c 500
+            "$STATE_DIR/stage_end.sh" "Download Magisk" failure
+            exit 1
+          fi
+
+          URL=$(echo "$RESPONSE" | jq -r '[.assets[] | select(.name | test("^Magisk-.*\\.apk$")) | .browser_download_url][0]')
+
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "::error::No Magisk APK found."
+            echo "$RESPONSE" | jq -r '.assets[].name' || true
+            "$STATE_DIR/stage_end.sh" "Download Magisk" failure
+            exit 1
+          fi
+
+          echo "Downloading: $URL"
+          aria2c -x4 "$URL" -o magisk.apk || curl -fL "$URL" -o magisk.apk
+
+          if [ ! -f "magisk.apk" ]; then
+            echo "::error::Download failed."
+            "$STATE_DIR/stage_end.sh" "Download Magisk" failure
+            exit 1
+          fi
+
+          mv magisk.apk Magisk-latest.zip
+          echo "MAGISK_ZIP_PATH=$HOME/Magisk/Magisk-latest.zip" >> "$GITHUB_ENV"
+
+          "$STATE_DIR/stage_end.sh" "Download Magisk" success
+
+      # ============================================================
+      # LDCHECK
+      # ============================================================
+      - name: Configure LDCHECK
+        if: inputs.LDCHECK == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "LDCHECK enabled."
+          echo "Requested path: ${{ inputs.LDCHECKPATH }}"
+          {
+            echo "LDCHECK_ENABLED=true"
+            echo "LDCHECK_PATH=${{ inputs.LDCHECKPATH }}"
+          } >> "$GITHUB_ENV"
+
+      # ============================================================
+      # CLEAN PATCH STATE
+      # ============================================================
+      - name: Clean patch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SYNC_PATH" 2>/dev/null || exit 0
+
+          echo "Cleaning patch artifacts..."
+          find . -name "*.rej" -type f -delete 2>/dev/null || true
+          find . -name "*.orig" -type f -delete 2>/dev/null || true
+
+          for d in system/vold system/libvintf bootable/recovery vendor/recovery; do
+            if [ -d "$d/.git" ]; then
+              (cd "$d" && git checkout -f -- . >/dev/null 2>&1 && git clean -fd >/dev/null 2>&1) || true
+              echo "  Reset: $d"
+            fi
+          done
+
+          echo "Patch artifacts cleaned."
+
+      # ============================================================
+      # FIX LIBBLKID — PERMANENT PATCH
+      # ============================================================
+      - name: Fix libblkid source write bug
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Fix libblkid"
+
+          cd "$SYNC_PATH"
+
+          LIBBLKID_BP="bootable/recovery/libblkid/Android.bp"
+          LIBBLKID_DIR="bootable/recovery/libblkid"
+
+          if [ -f "$LIBBLKID_BP" ]; then
+            cp "$LIBBLKID_BP" "$LIBBLKID_BP.bak" 2>/dev/null || true
+            sed -i 's/^genrule {/genrule_disabled {/g' "$LIBBLKID_BP" || true
+            sed -i 's/generated_sources:/\/\/ generated_sources:/g' "$LIBBLKID_BP" || true
+            sed -i 's/export_include_dirs:/\/\/ export_include_dirs:/g' "$LIBBLKID_BP" || true
+            echo "✅ libblkid Android.bp patched."
+          fi
+
+          mkdir -p "$LIBBLKID_DIR/src"
+          if [ ! -f "$LIBBLKID_DIR/src/config.h" ]; then
+            printf '%s\n' \
+              '#define HAVE_ERR_H 1' \
+              '#define HAVE_MEMPCPY 1' \
+              '#define HAVE_FSYNC 1' \
+              '#define HAVE_LOFF_T 1' \
+              > "$LIBBLKID_DIR/src/config.h"
+            echo "✅ libblkid config.h generated."
+          fi
+
+          chmod -R u+w "$LIBBLKID_DIR" 2>/dev/null || true
+
+          "$STATE_DIR/stage_end.sh" "Fix libblkid" success
+
+      # ============================================================
+      # BUILD TWRP — GENERIC
+      # ============================================================
+      - name: Build TWRP
+        shell: bash
+        run: |
+          "$STATE_DIR/stage_start.sh" "Build TWRP"
+
+          cd "$SYNC_PATH"
+
+          set +e
+          set +u
+
+          export TOP="$SYNC_PATH"
+          export ZSH_VERSION=""
+          export TMPDIR="${TMPDIR:-${GITHUB_WORKSPACE}/.tmp}"
+          mkdir -p "$TMPDIR"
+
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C
+          # SenseiForge/TWRP trees may rely on the "twrp" product prefix; lunch
+          # picks the makefile from the device tree automatically.
+          export USE_CCACHE="${USE_CCACHE:-1}"
+          export CCACHE_DISABLE="${CCACHE_DISABLE:-0}"
+          export CCACHE_EXEC="$(command -v ccache)"
+          echo "ccache USE_CCACHE=$USE_CCACHE CCACHE_DISABLE=$CCACHE_DISABLE"
+
+          EXTRA="${{ inputs.EXTRA_CMD }}"
+          if [ -n "$EXTRA" ]; then
+            echo "Applying extra commands: $EXTRA"
+            eval "$EXTRA"
+          fi
+
+          source build/envsetup.sh
+          ENVSETUP_STATUS=$?
+
+          if ! type lunch >/dev/null 2>&1; then
+            echo "::error::lunch command not found after envsetup.sh"
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build TWRP" failure
+            exit 1
+          fi
+
+          if [ "$ENVSETUP_STATUS" -ne 0 ]; then
+            echo "::warning::envsetup.sh exited $ENVSETUP_STATUS (patch conflict). Continuing..."
+          fi
+
+          LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
+          if [ -f "$LUNCH_OVERRIDE" ]; then
+            LUNCH_TARGET=$(tr -d '[:space:]' < "$LUNCH_OVERRIDE")
+          else
+            LUNCH_TARGET="twrp_${DEVICE_NAME}-eng"
+          fi
+
+          echo "Lunch target: $LUNCH_TARGET"
+
+          lunch "$LUNCH_TARGET"
+          LUNCH_STATUS=$?
+
+          if [ "$LUNCH_STATUS" -ne 0 ]; then
+            echo "::error::lunch failed with code $LUNCH_STATUS"
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build TWRP" failure
+            exit 1
+          fi
+
+          make clean
+
+          BUILD_JOBS=$(nproc)
+          echo "Building with ${BUILD_JOBS} jobs..."
+
+          mka "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
+          MKA_STATUS=${PIPESTATUS[0]}
+
+          if [ "$MKA_STATUS" -ne 0 ]; then
+            if grep -q "ccache: error: Read-only file system" "$STATE_DIR/build.log" 2>/dev/null; then
+              echo
+              echo "========================================"
+              echo "⚠️ CCACHE READ-ONLY ERROR — DISABLING CCACHE AND RETRYING"
+              echo "========================================"
+              # The filesystem backing CCACHE_DIR went read-only (usually the disk
+              # ran out of space). Recreating the dir does NOT help because the
+              # fs is still read-only. Disable ccache entirely for this run so the
+              # build can complete (slower, but deterministic) instead of dying.
+              ccache -o disable 2>/dev/null || true
+              export CCACHE_DISABLE=1
+              export USE_CCACHE=0
+              rm -rf "${CCACHE_DIR:?}" 2>/dev/null || true
+              make clean 2>/dev/null || true
+              df -h "$CCACHE_DIR" 2>/dev/null || true
+              echo "Retrying build WITHOUT ccache..."
+              mka "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
+              MKA_STATUS=${PIPESTATUS[0]}
+            fi
+          fi
+
+          if [ "$MKA_STATUS" -ne 0 ]; then
+            echo "::error::mka failed with code $MKA_STATUS"
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build TWRP" failure
+            exit 1
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Build TWRP" success
+
+      # ============================================================
+      # VALIDATE OUTPUT
+      # ============================================================
+      - name: Validate build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Validate Output"
+
+          OUT="$SYNC_PATH/out/target/product/$DEVICE_NAME"
+
+          case "$TARGET" in
+            vendorbootimage)
+              IMAGE="$OUT/vendor_boot.img"
+              RELEASE_IMAGE="TWRP-${DEVICE_NAME}-vendor_boot.img"
+              ;;
+            recoveryimage)
+              IMAGE="$OUT/recovery.img"
+              RELEASE_IMAGE="TWRP-${DEVICE_NAME}-recovery.img"
+              ;;
+            bootimage)
+              IMAGE="$OUT/boot.img"
+              RELEASE_IMAGE="TWRP-${DEVICE_NAME}-boot.img"
+              ;;
+          esac
+
+          if [ ! -f "$IMAGE" ]; then
+            echo "::error::Expected image was not produced: $IMAGE"
+            echo "Available output:"
+            find "$OUT" -maxdepth 1 -type f -printf '%f\n' | sort || true
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Validate Output" failure
+            exit 1
+          fi
+
+          SIZE=$(stat -c%s "$IMAGE")
+          MD5=$(md5sum "$IMAGE" | awk '{print $1}')
+
+          cp -f "$IMAGE" "$OUT/$RELEASE_IMAGE"
+
+          ZIP=$(find "$OUT" -maxdepth 1 -type f -iname 'TWRP*.zip' -print -quit || true)
+
+          {
+            echo "OUT_DIR=$OUT"
+            echo "IMAGE_PATH=$IMAGE"
+            echo "RELEASE_IMAGE=$RELEASE_IMAGE"
+            echo "IMAGE_SIZE=$SIZE"
+            echo "MD5_IMG=$MD5"
+            echo "CHECK_IMG_IS_OK=true"
+            echo "RECOVERY_ZIP=$ZIP"
+            echo "BUILD_DATE=$(date -u +%Y%m%d-%H%M)"
+          } >> "$GITHUB_ENV"
+
+          echo "========================================"
+          echo "Build output verified"
+          echo "Image : $IMAGE"
+          echo "Size  : $SIZE bytes"
+          echo "MD5   : $MD5"
+          echo "========================================"
+
+          "$STATE_DIR/stage_end.sh" "Validate Output" success
+
+      # ============================================================
+      # GITHUB RELEASE
+      # ============================================================
+      - name: Upload to GitHub Release
+        if: env.CHECK_IMG_IS_OK == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.IMAGE_PATH }}
+            ${{ env.OUT_DIR }}/${{ env.RELEASE_IMAGE }}
+            ${{ env.RECOVERY_ZIP }}
+          name: "🧡 TWRP ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}"
+          tag_name: "build-${{ github.run_id }}"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## 🧡 TWRP Recovery — `${{ env.DEVICE_NAME }}`
+
+            | | |
+            |---|---|
+            | **TWRP** | `${{ env.TWRP_BRANCH }}` |
+            | **Target** | `${{ env.TARGET }}` |
+            | **Device tree** | `${{ inputs.DT_REPO_URL }}` |
+            | **Tree branch** | `${{ inputs.DT_BRANCH }}` |
+            | **Tree commit** | `${{ env.COMMIT_ID }}` |
+            | **Maintainer** | `${{ env.MAINTAINER }}` |
+            | **Build date** | `${{ env.BUILD_DATE }}` |
+            | **Image size** | `${{ env.IMAGE_SIZE }}` bytes |
+            | **MD5** | `${{ env.MD5_IMG }}` |
+
+      # ============================================================
+      # MIRROR — OSHI.AT
+      # ============================================================
+      - name: Mirror image to oshi.at
+        if: env.CHECK_IMG_IS_OK == 'true' && inputs.UPLOAD_RESULTS == true
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          FILE="$IMAGE_PATH"
+          RESULT=$(curl -skT "$FILE" "https://oshi.at/TWRP-${DEVICE_NAME}-${TARGET}.img/20160" 2>/dev/null || true)
+          LINK=$(echo "$RESULT" | awk '/DL:/ {print $2; exit}')
+          if [ -n "$LINK" ]; then
+            echo "OSHI_LINK=$LINK" >> "$GITHUB_ENV"
+            echo "oshi.at: $LINK"
+          else
+            echo "oshi.at upload returned no download link."
+          fi
+
+      # ============================================================
+      # MIRROR — GOFILE
+      # ============================================================
+      - name: Mirror image to Gofile
+        if: env.CHECK_IMG_IS_OK == 'true' && inputs.UPLOAD_RESULTS == true
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          FILE="$IMAGE_PATH"
+          SERVER=$(curl -fsSL https://api.gofile.io/servers | jq -r '.data.servers[0].name // empty' 2>/dev/null || true)
+          if [ -z "$SERVER" ]; then
+            echo "Could not obtain a Gofile server."
+            exit 0
+          fi
+          RESPONSE=$(curl -fsSL -F "file=@${FILE}" "https://${SERVER}.gofile.io/uploadFile" 2>/dev/null || true)
+          LINK=$(echo "$RESPONSE" | jq -r '.data.downloadPage // empty' 2>/dev/null || true)
+          if [ -n "$LINK" ]; then
+            echo "GOFILE_LINK=$LINK" >> "$GITHUB_ENV"
+            echo "Gofile: $LINK"
+          else
+            echo "Gofile upload returned no download page."
+          fi
+
+      # ============================================================
+      # LDCHECK — CHECK MISSING SHARED LIBS (tools from recovery_spinel_tree)
+      # ============================================================
+      - name: Run LDCheck
+        if: env.LDCHECK_ENABLED == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}/recovery/root"
+          if [ -f "$GITHUB_WORKSPACE/tools/ldcheck" ] && [ -f "$GITHUB_WORKSPACE/tools/libneeds" ]; then
+            cp "$GITHUB_WORKSPACE/tools/libneeds" "$OUT/libneeds"
+            cp "$GITHUB_WORKSPACE/tools/ldcheck"  "$OUT/ldcheck"
+            chmod +x "$OUT/ldcheck" "$OUT/libneeds"
+            cd "$OUT"
+            python3 ldcheck \
+              -p system/lib64:vendor/lib64:system/lib:vendor/lib \
+              -d ${LDCHECK_PATH}
+          else
+            echo "::warning::tools/ldcheck or tools/libneeds not found in builder repo — skipping LDCheck."
+            exit 0
+          fi
+
+      # ============================================================
+      # TELEGRAM COMPLETED — PROFESSIONAL & SMART
+      # ============================================================
+      - name: Telegram - build completed
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+
+          if [ -f "$STATE_DIR/telegram_monitor_pid" ]; then
+            touch "$STATE_DIR/stop_monitor"
+            sleep 1
+            kill "$(cat "$STATE_DIR/telegram_monitor_pid")" >/dev/null 2>&1 || true
+            rm -f "$STATE_DIR/telegram_monitor_pid"
+          fi
+
+          if [ -z "${TG_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "Telegram disabled."
+            exit 0
+          fi
+
+          MESSAGE_ID=""
+          if [ -f "$STATE_DIR/telegram_message_id" ]; then
+            MESSAGE_ID=$(cat "$STATE_DIR/telegram_message_id")
+          fi
+
+          escape_html() {
+            "$STATE_DIR/tg_escape.sh" "$1"
+          }
+
+          format_time() {
+            local S="${1:-0}"
+            if [ "$S" -lt 60 ]; then
+              printf "%02ds" "$S"
+            elif [ "$S" -lt 3600 ]; then
+              printf "%02dm %02ds" "$((S / 60))" "$((S % 60))"
+            else
+              printf "%02dh %02dm %02ds" "$((S / 3600))" "$(((S % 3600) / 60))" "$((S % 60))"
+            fi
+          }
+
+          BUILD_START_TS=$(cat "$STATE_DIR/build_start" 2>/dev/null || date +%s)
+          NOW_TS=$(date +%s)
+          TOTAL_SECONDS=$((NOW_TS - BUILD_START_TS))
+
+          FAILED_STAGE=""
+          FAILURE_REASON=""
+          if [ -f "$STATE_DIR/failed_stage" ]; then
+            FAILED_STAGE=$(cat "$STATE_DIR/failed_stage" 2>/dev/null)
+          fi
+          if [ -f "$STATE_DIR/failure_reason" ]; then
+            FAILURE_REASON=$(cat "$STATE_DIR/failure_reason" 2>/dev/null)
+          fi
+
+          LAST_ERRORS=""
+          if [ "${{ job.status }}" != "success" ]; then
+            if [ -f "$STATE_DIR/build.log" ]; then
+              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED|failed with|Stop\.|ninja: build stopped' "$STATE_DIR/build.log" | tail -8 | sed 's/^[[:space:]]*//' || true)
+            fi
+            if [ -z "$LAST_ERRORS" ] && [ -f "$STATE_DIR/sync.log" ]; then
+              LAST_ERRORS=$(grep -Ei 'error:|fatal:|FAILED' "$STATE_DIR/sync.log" | tail -8 | sed 's/^[[:space:]]*//' || true)
+            fi
+          fi
+
+          STAGES_INFO=""
+          DONE_COUNT=0
+          if [ -f "$STATE_DIR/completed_stages" ]; then
+            while IFS='|' read -r SNAME SSTATUS SELAPSED; do
+              [ -z "$SNAME" ] && continue
+              DONE_COUNT=$((DONE_COUNT + 1))
+              if [ "$SSTATUS" = "success" ]; then
+                ICON="🟢"
+              else
+                ICON="🔴"
+              fi
+              STAGES_INFO="${STAGES_INFO}\n${ICON} <code>$(escape_html "$SNAME")</code>  <i>$(format_time "$SELAPSED")</i>"
+            done < "$STATE_DIR/completed_stages"
+          fi
+          [ -n "$STAGES_INFO" ] || STAGES_INFO="\n⚪ <i>No stage history recorded.</i>"
+
+          DEVICE="${DEVICE_NAME:-unknown}"
+          BRAND="${DEVICE_BRAND:-unknown}"
+          MODEL="${DEVICE_MODEL:-}"
+          MD5="${MD5_IMG:-N/A}"
+          RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/build-${GITHUB_RUN_ID}"
+          LOG_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS_ICON="🟢"
+            STATUS_TITLE="BUILD SUCCESSFUL"
+            STATUS_SUBTITLE="Artifacts verified and ready."
+          else
+            STATUS_ICON="🔴"
+            STATUS_TITLE="BUILD FAILED"
+            STATUS_SUBTITLE="Pipeline stopped — diagnostics attached below."
+          fi
+
+          TEXT=$(printf '%s\n' \
+            '🧡 <b>MKVenomPro • TWRP CI</b>' \
+            '' \
+            '╭────────────────────────────╮' \
+            '│ '"$STATUS_ICON"' <b>'"$STATUS_TITLE"'</b>            │' \
+            '│ 🧩 '"$STATUS_SUBTITLE"' │' \
+            '╰────────────────────────────╯' \
+            '' \
+            '📦 <b>BUILD SUMMARY</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            '🏷️ <b>Brand</b>      <code>'"$(escape_html "$BRAND")"'</code>' \
+            '📱 <b>Device</b>     <code>'"$(escape_html "$DEVICE")"'</code>' \
+            '🧡 <b>TWRP</b>  <code>'"$(escape_html "$TWRP_BRANCH")"'</code>' \
+            '🎯 <b>Target</b>     <code>'"$(escape_html "$TARGET")"'</code>' \
+            '⏱️ <b>Total time</b> <code>'"$(format_time "$TOTAL_SECONDS")"'</code>' \
+            '📊 <b>Stages done</b> <code>'"$DONE_COUNT"'</code>' \
+            '🔢 <b>MD5</b>        <code>'"$(escape_html "$MD5")"'</code>' \
+            '' \
+            '🧭 <b>PIPELINE HISTORY</b>' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+            "${STAGES_INFO}" \
+            '' \
+            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+          if [ -n "$MODEL" ]; then
+            TEXT="${TEXT}\n📱 <b>Model</b>      <code>$(escape_html "$MODEL")</code>"
+          fi
+
+          if [ "${{ job.status }}" != "success" ]; then
+            TEXT="${TEXT}\n\n🚨 <b>FAILURE ANALYSIS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            if [ -n "$FAILED_STAGE" ]; then
+              TEXT="${TEXT}\n📍 <b>Stage</b>   <code>$(escape_html "$FAILED_STAGE")</code>"
+            fi
+            if [ -n "$FAILURE_REASON" ]; then
+              TEXT="${TEXT}\n🏷️ <b>Class</b>   <code>$(escape_html "$FAILURE_REASON")</code>"
+            fi
+            if [ -n "$LAST_ERRORS" ]; then
+              TRUNCATED_ERRORS=$(echo "$LAST_ERRORS" | while read -r line; do
+                if [ "${#line}" -gt 140 ]; then
+                  echo "${line:0:140}..."
+                else
+                  echo "$line"
+                fi
+              done)
+              TEXT="${TEXT}\n\n💥 <b>Last errors</b>\n<pre>$(escape_html "$TRUNCATED_ERRORS")</pre>"
+            fi
+          else
+            TEXT="${TEXT}\n\n📦 <b>DOWNLOADS</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🔹 <a href=\"${RELEASE_URL}\">GitHub Release</a>"
+            if [ -n "${OSHI_LINK:-}" ]; then
+              TEXT="${TEXT}\n☁️ <a href=\"${OSHI_LINK}\">oshi.at mirror</a>"
+            fi
+            if [ -n "${GOFILE_LINK:-}" ]; then
+              TEXT="${TEXT}\n☁️ <a href=\"${GOFILE_LINK}\">Gofile mirror</a>"
+            fi
+            TEXT="${TEXT}\n\n✨ <i>Build completed successfully.</i>"
+          fi
+
+          TEXT="${TEXT}\n\n🔗 <a href=\"${LOG_URL}\">Open GitHub Actions Logs</a>"
+
+          if [ "${#TEXT}" -gt 3900 ]; then
+            TEXT="${TEXT:0:3800}\n\n⚠️ <i>Message trimmed to fit Telegram.</i>\n🔗 <a href=\"${LOG_URL}\">Full logs</a>"
+          fi
+
+          SEND_OK=false
+
+          if [ -n "$MESSAGE_ID" ]; then
+            RESPONSE=$(curl -sS \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -X POST \
+              "https://api.telegram.org/bot${TG_TOKEN}/editMessageText" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              -d "message_id=${MESSAGE_ID}" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "disable_web_page_preview=true" \
+              --data-urlencode "text=${TEXT}" \
+              2>&1)
+
+            if echo "$RESPONSE" | grep -q '"ok":true'; then
+              echo "Telegram completed notification edited."
+              SEND_OK=true
+            else
+              echo "::warning::editMessageText failed, falling back to sendMessage."
+              echo "$RESPONSE"
+            fi
+          fi
+
+          if [ "$SEND_OK" = "false" ]; then
+            RESPONSE=$(curl -sS \
+              --connect-timeout 10 \
+              --max-time 30 \
+              -X POST \
+              "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+              -d "chat_id=${TG_CHAT_ID}" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "disable_web_page_preview=true" \
+              --data-urlencode "text=${TEXT}" \
+              2>&1)
+
+            if echo "$RESPONSE" | grep -q '"ok":true'; then
+              echo "Telegram completed notification sent (fallback)."
+            else
+              echo "::warning::Telegram fallback notification also failed."
+              echo "$RESPONSE"
+            fi
+          fi
+
+      # ============================================================
+      # CCACHE STATISTICS
+      # ============================================================
+      - name: ccache statistics
+        if: always()
+        shell: bash
+        run: |
+          ccache -s || true
