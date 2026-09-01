@@ -349,15 +349,33 @@ jobs:
           set -euo pipefail
           "$STATE_DIR/stage_start.sh" "Configure ccache"
 
-          # Keep ccache fully inside the workspace (writable, not under RUNNER_TEMP)
-          # so actions/cache restores it in a location ccache can actually lock/write.
-          CCACHE_SELECTED="${GITHUB_WORKSPACE}/.ccache"
+          # Cache placement, learned from TheGreatEclipse/recovery_spinel_tree:
+          # put ccache somewhere cleanly writable OUTSIDE the GITHUB_WORKSPACE first
+          # (/tmp is what the reference builder uses). On some self-hosted runners
+          # the workspace volume can go read-only mid-build even when the disk has
+          # plenty of space, which surfaces as "ccache: error: Read-only file
+          # system". We probe each candidate for real read/write and pick the first
+          # that works, so ccache stays ENABLED.
+          CCACHE_SELECTED=""
+          for cand in "/tmp/ccache" "$RUNNER_TEMP/ccache" "${GITHUB_WORKSPACE}/.ccache"; do
+            mkdir -p "$cand" 2>/dev/null || continue
+            if touch "$cand/.rw-probe" 2>/dev/null; then
+              rm -f "$cand/.rw-probe"
+              CCACHE_SELECTED="$cand"
+              break
+            fi
+          done
+          if [ -z "$CCACHE_SELECTED" ]; then
+            echo "::error::No writable directory found for ccache."
+            "$STATE_DIR/stage_end.sh" "Configure ccache" failure
+            exit 1
+          fi
 
           rm -rf "$CCACHE_SELECTED"
           mkdir -p "$CCACHE_SELECTED"
 
           # ccache temp dir MUST stay on the same writable filesystem as CCACHE_DIR.
-          SAFE_TMPDIR="${GITHUB_WORKSPACE}/.tmp"
+          SAFE_TMPDIR="$CCACHE_SELECTED/.tmp"
           mkdir -p "$SAFE_TMPDIR"
 
           {
@@ -369,12 +387,8 @@ jobs:
             echo "TMPDIR=$SAFE_TMPDIR"
           } >> "$GITHUB_ENV"
 
-          # Cap ccache to available disk so it never fills the disk and triggers
-          # an EROFS / read-only remount (the real cause of the build failure).
-          # OrangeFox out/ lives on the SAME filesystem as CCACHE_DIR here, so a
-          # full disk turns the whole fs read-only and every ccache write dies.
-          # If free space is too tight to reserve the whole out/ plus ccache, we
-          # DISABLE ccache up front and free the space so the build can complete.
+          # Cap ccache to available disk so it never fills the disk (the disk is
+          # usually large; this is a safety net, not the cause of the crash).
           SET_SIZE="${{ inputs.CCACHE_SIZE }}"
           case "$SET_SIZE" in
             20G)  EFFECTIVE_SIZE="8G" ;;
@@ -386,27 +400,12 @@ jobs:
             *)    EFFECTIVE_SIZE="10G" ;;
           esac
 
-          # Estimate out/ size: a full OrangeFox tree needs roughly this much.
-          AVAIL_BYTES=$(df -Pk "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print $4*1024}')
-          AVAIL_GB=$(df -h "$GITHUB_WORKSPACE" 2>/dev/null | awk 'NR==2 {print $4}')
-          echo "Workspace available: ${AVAIL_GB:-?} (requested ccache: $SET_SIZE, effective: $EFFECTIVE_SIZE)"
-          MIN_BYTES=$((24 * 1024 * 1024 * 1024))  # 24G ~ conservative out/ + ccache floor
-          if [ -n "$AVAIL_BYTES" ] && [ "$AVAIL_BYTES" -lt "$MIN_BYTES" ]; then
-            echo "::warning::Only ${AVAIL_GB:-?} free — too tight for ccache + OrangeFox out/. Disabling ccache to protect the build."
-            ccache -o disable 2>/dev/null || true
-            rm -rf "$CCACHE_SELECTED" 2>/dev/null || true
-            mkdir -p "$CCACHE_SELECTED"
-            echo "CCACHE_DISABLE=1" >> "$GITHUB_ENV"
-            echo "USE_CCACHE=0" >> "$GITHUB_ENV"
-            echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
-          else
-            echo "Effective ccache size: $EFFECTIVE_SIZE"
-            ccache -o enable 2>/dev/null || true
-            ccache -M "$EFFECTIVE_SIZE" 2>/dev/null || true
-            echo "CCACHE_DISABLE=0" >> "$GITHUB_ENV"
-            echo "USE_CCACHE=1" >> "$GITHUB_ENV"
-            echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
-          fi
+          echo "Effective ccache size: $EFFECTIVE_SIZE"
+          ccache -o enable 2>/dev/null || true
+          ccache -M "$EFFECTIVE_SIZE" 2>/dev/null || true
+          echo "CCACHE_DISABLE=0" >> "$GITHUB_ENV"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=$EFFECTIVE_SIZE" >> "$GITHUB_ENV"
           echo "CCACHE_DIR: $CCACHE_SELECTED"
           echo "TMPDIR: $SAFE_TMPDIR"
           ccache -s || true
@@ -420,7 +419,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-${{ hashFiles('**/BoardConfig.mk') }}
+          # Key on the branch (the device tree is cloned mid-run, so
+          # hashFiles('**/BoardConfig.mk') was empty here — that's what produced
+          # the broken "ccache-v2-Linux-12.1-" key / repeated cache-misses).
+          key: ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
           restore-keys: |
             ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
             ccache-v2-${{ runner.os }}-
@@ -1126,7 +1128,7 @@ jobs:
 
           export TOP="$SYNC_PATH"
           export ZSH_VERSION=""
-          export TMPDIR="${GITHUB_WORKSPACE}/.tmp"
+          export TMPDIR="${TMPDIR:-${GITHUB_WORKSPACE}/.tmp}"
           mkdir -p "$TMPDIR"
 
           export FOX_BUILD_DEVICE="$DEVICE_NAME"
