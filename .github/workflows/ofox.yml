@@ -104,7 +104,7 @@ on:
           - "4"
 
       SWAP_SIZE:
-        description: "Swap size for self-hosted (GB, 0 = disable)"
+        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 12 GB."
         required: false
         type: choice
         default: "0"
@@ -113,6 +113,10 @@ on:
           - "8"
           - "12"
           - "16"
+          - "32"
+          - "64"
+          - "128"
+          - "200"
 
       EXTRA_CMD:
         description: "Extra exports before lunch (optional, e.g. FOX_VARIANT=...)"
@@ -1358,6 +1362,29 @@ jobs:
             echo "Gofile: $LINK"
           else
             echo "Gofile upload returned no download page."
+          fi
+
+      # ============================================================
+      # LDCHECK — CHECK MISSING SHARED LIBS (tools from recovery_spinel_tree)
+      # ============================================================
+      - name: Run LDCheck
+        if: env.LDCHECK_ENABLED == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          OUT="$SYNC_PATH/out/target/product/${DEVICE_NAME}/recovery/root"
+          if [ -f "$GITHUB_WORKSPACE/tools/ldcheck" ] && [ -f "$GITHUB_WORKSPACE/tools/libneeds" ]; then
+            cp "$GITHUB_WORKSPACE/tools/libneeds" "$OUT/libneeds"
+            cp "$GITHUB_WORKSPACE/tools/ldcheck"  "$OUT/ldcheck"
+            chmod +x "$OUT/ldcheck" "$OUT/libneeds"
+            cd "$OUT"
+            python3 ldcheck \
+              -p system/lib64:vendor/lib64:system/lib:vendor/lib \
+              -d ${LDCHECK_PATH}
+          else
+            echo "::warning::tools/ldcheck or tools/libneeds not found in builder repo — skipping LDCheck."
+            exit 0
           fi
 
       # ============================================================
