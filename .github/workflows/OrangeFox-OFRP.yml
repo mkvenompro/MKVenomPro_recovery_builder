@@ -1234,6 +1234,51 @@ jobs:
           fi
 
           if [ "$MKA_STATUS" -ne 0 ]; then
+            # --- DEBUG: dump soong variables to isolate the bad \\d value ---
+            TPROD="${LUNCH_TARGET%%-*}"
+            SOONG_VARS="${TOP}/out/soong/soong.${TPROD}.variables"
+            echo "::group::Soong variables debug (${SOONG_VARS})"
+            if [ -f "$SOONG_VARS" ]; then
+              echo "File size: $(wc -c < "$SOONG_VARS") bytes"
+              echo "--- lines containing a backslash ---"
+              grep -n '\\' "$SOONG_VARS" | head -60 || echo "(no backslash lines found)"
+              echo "--- last parse error mentions in build.log ---"
+              grep -n "did not parse\|soong.*variables\|Invalid" "$STATE_DIR/build.log" 2>/dev/null | tail -10 || true
+              echo "--- JSON validation ---"
+              if command -v python3 >/dev/null 2>&1; then
+                python3 - "$SOONG_VARS" <<'PYEOF'
+          import json, re, sys
+          p = sys.argv[1]
+          try:
+              with open(p, encoding="utf-8", errors="replace") as f:
+                  data = json.load(f)
+              print("JSON parses OK:", type(data).__name__)
+          except Exception as e:
+              print("JSON ERROR in", p)
+              print(repr(e))
+              m = re.search(r"char\s+(\d+)", str(e))
+              if m:
+                  off = int(m.group(1))
+                  with open(p, encoding="utf-8", errors="replace") as f:
+                      s = f.read()
+                  print("Context around char", off, ":")
+                  print(repr(s[max(0, off - 120):off + 120]))
+                  line_start = s.rfind("\n", 0, off) + 1
+                  line_end = s.find("\n", off)
+                  if line_end == -1:
+                      line_end = len(s)
+                  print("Offending line:", repr(s[line_start:line_end]))
+          PYEOF
+              else
+                echo "python3 not available; skipping JSON validation"
+                grep -n '\\' "$SOONG_VARS" | head -60 || true
+              fi
+            else
+              echo "NOT FOUND: $SOONG_VARS"
+              echo "--- out/soong listing ---"
+              ls -la "${TOP}/out/soong/" 2>/dev/null | head -40 || true
+            fi
+            echo "::endgroup::"
             echo "::error::mka failed with code $MKA_STATUS"
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
