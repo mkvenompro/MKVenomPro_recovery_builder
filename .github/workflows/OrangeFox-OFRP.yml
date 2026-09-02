@@ -506,6 +506,22 @@ jobs:
 
           "$STATE_DIR/stage_end.sh" "Clone OrangeFox sync" success
 
+      - name: Optimize repo sync job count
+        shell: bash
+        run: |
+          set -euo pipefail
+          SYNC_SCRIPT="${GITHUB_WORKSPACE}/OrangeFox/sync/orangefox_sync.sh"
+          echo "" >> "$SYNC_SCRIPT"
+          echo "# Override repo_sync to respect REPO_SYNC_JOBS (max 100)" >> "$SYNC_SCRIPT"
+          echo 'repo_sync() {' >> "$SYNC_SCRIPT"
+          echo '  local job_count="${REPO_SYNC_JOBS:-$(nproc --all)}"' >> "$SYNC_SCRIPT"
+          echo '  if [ "$job_count" -gt 100 ]; then' >> "$SYNC_SCRIPT"
+          echo '    job_count=100' >> "$SYNC_SCRIPT"
+          echo '  fi' >> "$SYNC_SCRIPT"
+          echo '  repo sync --force-sync -c -j$job_count --no-clone-bundle --no-tags "$@"' >> "$SYNC_SCRIPT"
+          echo '}' >> "$SYNC_SCRIPT"
+          echo "Optimized repo_sync job count (max 100)"
+
       # ============================================================
       # SOURCE SYNC
       # ============================================================
@@ -1168,7 +1184,10 @@ jobs:
           fi
 
           if [ "$ENVSETUP_STATUS" -ne 0 ]; then
-            echo "::warning::envsetup.sh exited $ENVSETUP_STATUS (patch conflict). Continuing..."
+            echo "::error::envsetup.sh exited $ENVSETUP_STATUS (patch conflict). Aborting."
+            echo "BUILD" > "$STATE_DIR/failure_reason"
+            "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
+            exit 1
           fi
 
           LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
