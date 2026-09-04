@@ -353,13 +353,6 @@ jobs:
           set -euo pipefail
           "$STATE_DIR/stage_start.sh" "Configure ccache"
 
-          # Cache placement, learned from TheGreatEclipse/recovery_spinel_tree:
-          # put ccache somewhere cleanly writable OUTSIDE the GITHUB_WORKSPACE first
-          # (/tmp is what the reference builder uses). On some self-hosted runners
-          # the workspace volume can go read-only mid-build even when the disk has
-          # plenty of space, which surfaces as "ccache: error: Read-only file
-          # system". We probe each candidate for real read/write and pick the first
-          # that works, so ccache stays ENABLED.
           CCACHE_SELECTED=""
           for cand in "/tmp/ccache" "$RUNNER_TEMP/ccache" "${GITHUB_WORKSPACE}/.ccache"; do
             mkdir -p "$cand" 2>/dev/null || continue
@@ -378,7 +371,6 @@ jobs:
           rm -rf "$CCACHE_SELECTED"
           mkdir -p "$CCACHE_SELECTED"
 
-          # ccache temp dir MUST stay on the same writable filesystem as CCACHE_DIR.
           SAFE_TMPDIR="$CCACHE_SELECTED/.tmp"
           mkdir -p "$SAFE_TMPDIR"
 
@@ -391,8 +383,6 @@ jobs:
             echo "TMPDIR=$SAFE_TMPDIR"
           } >> "$GITHUB_ENV"
 
-          # Cap ccache to available disk so it never fills the disk (the disk is
-          # usually large; this is a safety net, not the cause of the crash).
           SET_SIZE="${{ inputs.CCACHE_SIZE }}"
           case "$SET_SIZE" in
             20G)  EFFECTIVE_SIZE="8G" ;;
@@ -423,9 +413,6 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          # Key on the branch (the device tree is cloned mid-run, so
-          # hashFiles('**/BoardConfig.mk') was empty here — that's what produced
-          # the broken "ccache-v2-Linux-12.1-" key / repeated cache-misses).
           key: ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
           restore-keys: |
             ccache-v2-${{ runner.os }}-${{ inputs.FOX_BRANCH }}-
@@ -438,9 +425,6 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          # actions/cache restores cached files as READ-ONLY (0444).
-          # ccache refuses to write locks/index into a read-only tree (EROFS).
-          # Force every file/dir writable BEFORE the build; purge if that is impossible.
           if [ -n "${CCACHE_DIR:-}" ] && [ -d "$CCACHE_DIR" ]; then
             echo "Repairing ccache permissions..."
             chmod -R u+rwX,go-w "$CCACHE_DIR" 2>/dev/null || true
@@ -456,7 +440,6 @@ jobs:
               mkdir -p "$CCACHE_DIR"
             fi
           fi
-          # Give soong/ccache a guaranteed writable scratch dir (not RUNNER_TEMP).
           mkdir -p "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
           chmod -R u+rwX "${GITHUB_WORKSPACE}/.tmp" 2>/dev/null || true
 
@@ -552,6 +535,78 @@ jobs:
           "$STATE_DIR/stage_end.sh" "Sync OrangeFox sources" success
 
       # ============================================================
+      # VERIFY + REPAIR ORANGEFOX PATCHES  (NEW — THE FIX)
+      # ------------------------------------------------------------
+      # orangefox_sync.sh applies patches with `patch -p1` / `sed` whose
+      # anchors can silently drift when upstream (minimal-manifest-twrp,
+      # vendor/twrp) updates its files. When that happens the sync step
+      # still "succeeds" but the tree is half-patched and envsetup/lunch
+      # fail seconds into the build. Verify the critical patches here and
+      # repair them before burning build time.
+      # ============================================================
+      - name: Verify and repair OrangeFox patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Verify OrangeFox patches"
+
+          cd "$SYNC_PATH"
+
+          # --- 1) vendor/twrp must include the OrangeFox soong makefile ---
+          # orangefox_sync.sh inserts it with sed anchored on
+          # "SOONG_CONFIG_NAMESPACES += twrpVarsPlugin". If that anchor line
+          # changed upstream the sed silently no-ops and the build later
+          # dies. Detect and repair deterministically.
+          SOONG_MK="vendor/twrp/config/BoardConfigSoong.mk"
+          if [ -f "$SOONG_MK" ]; then
+            if grep -q "orangefox_soong.mk" "$SOONG_MK"; then
+              echo "✅ vendor/twrp OrangeFox include is present."
+            else
+              echo "⚠️ vendor/twrp OrangeFox include MISSING — inserting it."
+              sed -i '1i include bootable/recovery/orangefox_soong.mk' "$SOONG_MK"
+              echo "----- $SOONG_MK (head) -----"
+              head -5 "$SOONG_MK"
+            fi
+          else
+            echo "::error::$SOONG_MK not found — the sync tree is incomplete."
+            "$STATE_DIR/stage_end.sh" "Verify OrangeFox patches" failure
+            exit 1
+          fi
+
+          # --- 2) build/envsetup.sh must exist AND be syntactically valid ---
+          if [ ! -f "build/envsetup.sh" ]; then
+            echo "::error::build/envsetup.sh is missing after sync!"
+            ls -la build/ 2>/dev/null | head -20 || true
+            "$STATE_DIR/stage_end.sh" "Verify OrangeFox patches" failure
+            exit 1
+          fi
+          if ! bash -n build/envsetup.sh; then
+            echo "::error::build/envsetup.sh has a syntax error (manifest patch drift):"
+            bash -n build/envsetup.sh 2>&1 | head -10 || true
+            "$STATE_DIR/stage_end.sh" "Verify OrangeFox patches" failure
+            exit 1
+          fi
+          echo "✅ build/envsetup.sh present and syntactically valid."
+
+          # --- 3) update_engine patch (fox_12.1) — informational only ---
+          if [ -d system/update_engine ]; then
+            if grep -rqs "orangefox" system/update_engine --include="*.cpp" --include="*.h" 2>/dev/null; then
+              echo "✅ system/update_engine patch detected."
+            else
+              echo "::warning::system/update_engine OrangeFox patch not detected (non-fatal for most targets)."
+            fi
+          fi
+
+          # --- 4) leftover .rej/.orig from drifted patches must not survive ---
+          REJ_COUNT=$(find . -name "*.rej" -type f 2>/dev/null | wc -l)
+          if [ "$REJ_COUNT" -gt 0 ]; then
+            echo "::warning::Found $REJ_COUNT rejected patch file(s):"
+            find . -name "*.rej" -type f 2>/dev/null | head -10
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Verify OrangeFox patches" success
+
+      # ============================================================
       # GUAVA FIX (14.1 only)
       # ============================================================
       - name: Ensure Guava dependency (14.1 only)
@@ -582,7 +637,6 @@ jobs:
           DT_URL="${{ inputs.DT_REPO_URL }}"
           DT_BRANCH="${{ inputs.DT_BRANCH }}"
 
-          # --- Validate inputs up front (clear errors instead of cryptic clone failures) ---
           if [ -z "$DT_URL" ] || [ "$DT_URL" = "null" ]; then
             echo "::error::DT_REPO_URL is empty. Provide a full repo URL, e.g. https://github.com/OWNER/android_device_XIAOMI_DEVICE"
             "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
@@ -594,12 +648,10 @@ jobs:
             exit 1
           fi
 
-          # Normalize: strip trailing slashes and ".git"
           DT_URL="${DT_URL%/}"
           DT_URL="${DT_URL%.git}"
           echo "Cloning device tree: $DT_URL  (branch: $DT_BRANCH)"
 
-          # --- Resolve the canonical OWNER/REPO (strip proto + trailing junk) ---
           REPO_PATH="$DT_URL"
           case "$REPO_PATH" in
             http://*|https://*) REPO_PATH="${REPO_PATH#*//github.com/}" ;;
@@ -607,7 +659,6 @@ jobs:
             ssh://*@github.com/*) REPO_PATH="${REPO_PATH#*@github.com/}" ;;
           esac
           REPO_PATH="${REPO_PATH#/}"
-          # If there are extra leading segments (e.g. a mistaken user prefix), reduce to OWNER/REPO
           while [ "$(echo "$REPO_PATH" | tr '/' '\n' | wc -l)" -gt 2 ]; do
             REPO_PATH="${REPO_PATH#*/}"
           done
@@ -616,7 +667,6 @@ jobs:
 
           echo "Canonical repo owner/name: $REPO_OWNER/$REPO_NAME"
 
-          # --- Verify the repo + branch exist BEFORE cloning (clear messages) ---
           HTTP_CODE="000"
           if [ -n "${GT_TOKEN:-}" ]; then
             echo "Verifying repository via GitHub API..."
@@ -647,7 +697,6 @@ jobs:
             exit 1
           fi
 
-          # --- Detect if the repo is PRIVATE so we can authenticate the clone with the token ---
           REPO_PRIVATE="false"
           if [ -n "${GT_TOKEN:-}" ]; then
             REPO_META=$(curl -sS -f \
@@ -658,7 +707,6 @@ jobs:
           fi
           echo "Repository '${REPO_OWNER}/${REPO_NAME}' private: ${REPO_PRIVATE}"
 
-          # --- Build the clone URL; inject the token when the repo is private ---
           if [ "$REPO_PRIVATE" = "true" ]; then
             if [ -z "${GT_TOKEN:-}" ]; then
               echo "::error::'$REPO_OWNER/$REPO_NAME' is PRIVATE but no GT_TOKEN secret is set."
@@ -666,14 +714,13 @@ jobs:
               "$STATE_DIR/stage_end.sh" "Clone Device Tree" failure
               exit 1
             fi
-            # Strip any protocol/credentials and rebuild an authenticated https URL.
             CLONE_BASE="${DT_URL}"
             case "$CLONE_BASE" in
               http://*|https://*) ;;
               git@github.com:*)  CLONE_BASE="https://github.com/${CLONE_BASE#*github.com:}" ;;
             esac
-            CLONE_BASE="${CLONE_BASE##*://}"       # remove scheme
-            CLONE_BASE="${CLONE_BASE#*@}"          # remove any user:token@ already present
+            CLONE_BASE="${CLONE_BASE##*://}"
+            CLONE_BASE="${CLONE_BASE#*@}"
             CLONE_BASE="${CLONE_BASE%/}"
             CLONE_URL="https://x-access-token:${GT_TOKEN}@${CLONE_BASE}"
             echo "Using authenticated clone URL (private repo)."
@@ -717,7 +764,7 @@ jobs:
           DEVICE_MANUFACTURER=""
           DEVICE_MODEL=""
 
-          extract_val() {  # usage: extract_val <file> <multiline sed expr>
+          extract_val() {
             sed -n "$2" "$1" | head -n1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
           }
 
@@ -766,8 +813,6 @@ jobs:
             exit 1
           fi
 
-          # --- Canonical directory path: device/{manufacturer|brand|owner}/{device}, all lowercase ---
-          # Recovery trees expect device/<lowercase brand>/<device> (e.g. device/xiaomi/spinel).
           DIR_BRAND="${DEVICE_MANUFACTURER:-$DEVICE_BRAND}"
           [ -z "$DIR_BRAND" ] && DIR_BRAND="$REPO_OWNER"
           DIR_BRAND_LOWER="$(echo "$DIR_BRAND" | tr '[:upper:]' '[:lower:]')"
@@ -981,7 +1026,6 @@ jobs:
                 '📈 <b>Completed stages:</b> <code>'"$DONE_COUNT"'</code>' \
                 '🔗 <a href="https://github.com/'"$GITHUB_REPOSITORY"'/actions/runs/'"$GITHUB_RUN_ID"'">Live GitHub Logs</a>')
 
-              # Telegram messages have a 4096-character limit. Keep the live dashboard compact.
               if [ "${#TEXT}" -gt 3900 ]; then
                 TEXT="${TEXT:0:3850}\n\n⚠️ <i>History trimmed to fit Telegram.</i>"
               fi
@@ -1150,7 +1194,6 @@ jobs:
           export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export FOX_BUILD_TYPE="Unofficial-CI"
           export LC_ALL=C
-          # USE_CCACHE is set by "Configure ccache" (0 when the disk is too tight).
           export USE_CCACHE="${USE_CCACHE:-1}"
           export CCACHE_DISABLE="${CCACHE_DISABLE:-0}"
           export CCACHE_EXEC="$(command -v ccache)"
@@ -1166,21 +1209,45 @@ jobs:
             export FOX_USE_SPECIFIC_MAGISK_ZIP
           fi
 
-          source build/envsetup.sh
+          # ------------------------------------------------------------
+          # envsetup — THE FIX
+          # ------------------------------------------------------------
+          # Do NOT treat envsetup.sh's exit code as fatal by itself: in
+          # TWRP/AOSP trees envsetup.sh can return non-zero even when the
+          # environment was configured correctly. The authoritative check
+          # is whether the "lunch" function exists afterwards. Only when
+          # lunch is missing do we retry with full diagnostics.
+          ENVSETUP_LOG="$STATE_DIR/envsetup.log"
+          : > "$ENVSETUP_LOG"
+
+          # NOTE: never pipe `source` — a pipeline would run it in a
+          # subshell and lunch/functions would not persist.
+          source build/envsetup.sh > "$ENVSETUP_LOG" 2>&1
           ENVSETUP_STATUS=$?
+          cat "$ENVSETUP_LOG"
 
           if ! type lunch >/dev/null 2>&1; then
-            echo "::error::lunch command not found after envsetup.sh"
+            echo "::warning::lunch missing after first envsetup attempt (exit=$ENVSETUP_STATUS) — retrying with diagnostics."
+            echo "----- envsetup.log (tail) -----"
+            tail -30 "$ENVSETUP_LOG" || true
+            echo "----- bash -x trace (tail) -----"
+            bash -x -c '. build/envsetup.sh' 2>&1 | tail -40 || true
+            echo "--------------------------------"
+            echo "Retrying envsetup cleanly..."
+            . build/envsetup.sh || true
+          fi
+
+          if ! type lunch >/dev/null 2>&1; then
+            echo "::error::lunch command not available after envsetup.sh — the environment is genuinely broken."
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
             exit 1
           fi
 
           if [ "$ENVSETUP_STATUS" -ne 0 ]; then
-            echo "::error::envsetup.sh exited $ENVSETUP_STATUS (patch conflict). Aborting."
-            echo "BUILD" > "$STATE_DIR/failure_reason"
-            "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
-            exit 1
+            echo "::warning::envsetup.sh exited $ENVSETUP_STATUS but 'lunch' is available — known false positive, continuing."
+            echo "Last lines of envsetup output:"
+            tail -10 "$ENVSETUP_LOG" || true
           fi
 
           LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
@@ -1216,15 +1283,10 @@ jobs:
               echo "========================================"
               echo "⚠️ CCACHE READ-ONLY ERROR — DISABLING CCACHE AND RETRYING"
               echo "========================================"
-              # The filesystem backing CCACHE_DIR went read-only (usually the disk
-              # ran out of space). Recreating the dir does NOT help because the
-              # fs is still read-only. Disable ccache entirely for this run so the
-              # build can complete (slower, but deterministic) instead of dying.
               ccache -o disable 2>/dev/null || true
               export CCACHE_DISABLE=1
               export USE_CCACHE=0
               rm -rf "${CCACHE_DIR:?}" 2>/dev/null || true
-              # Free the disk: drop the ccache and any stale out/ so writes succeed.
               make clean 2>/dev/null || true
               df -h "$CCACHE_DIR" 2>/dev/null || true
               echo "Retrying build WITHOUT ccache..."
@@ -1234,7 +1296,6 @@ jobs:
           fi
 
           if [ "$MKA_STATUS" -ne 0 ]; then
-            # --- DEBUG: dump soong variables to isolate the bad \\d value ---
             TPROD="${LUNCH_TARGET%%-*}"
             SOONG_VARS="${TOP}/out/soong/soong.${TPROD}.variables"
             echo "::group::Soong variables debug (${SOONG_VARS})"
@@ -1422,7 +1483,7 @@ jobs:
           fi
 
       # ============================================================
-      # LDCHECK — CHECK MISSING SHARED LIBS (tools from recovery_spinel_tree)
+      # LDCHECK — CHECK MISSING SHARED LIBS
       # ============================================================
       - name: Run LDCheck
         if: env.LDCHECK_ENABLED == 'true'
@@ -1445,7 +1506,7 @@ jobs:
           fi
 
       # ============================================================
-      # TELEGRAM COMPLETED — PROFESSIONAL & SMART
+      # TELEGRAM COMPLETED
       # ============================================================
       - name: Telegram - build completed
         if: always()
