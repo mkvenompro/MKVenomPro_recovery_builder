@@ -104,7 +104,7 @@ on:
           - "4"
 
       SWAP_SIZE:
-        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 12 GB."
+        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 16 GB."
         required: false
         type: choice
         default: "0"
@@ -136,6 +136,24 @@ on:
           - "4"
           - "6"
           - "8"
+
+      ENABLE_PATCH_REPAIR:
+        description: "Repair known OrangeFox patch targets (vendor/twrp include). Device/fork-specific — leave false for generic builds."
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_PATCH_CLEAN:
+        description: "Reset patch artifacts (*.rej/*.orig) and force-reset known projects. Device/fork-specific — leave false for generic builds."
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_LIBBLKID_FIX:
+        description: "Apply libblkid build fix (MTK-specific: config.h + Android.bp genrule). Leave false for non-MTK/generic builds."
+        required: true
+        type: boolean
+        default: false
 
       LUNCH_VARIANT:
         description: "Lunch build variant (used with the 3-segment combo <product>-<release>-<variant>)"
@@ -182,6 +200,9 @@ jobs:
       LUNCH_VARIANT: ${{ inputs.LUNCH_VARIANT }}
       LUNCH_RELEASE: ${{ inputs.LUNCH_RELEASE }}
       BUILD_JOBS_INPUT: ${{ inputs.BUILD_JOBS }}
+      ENABLE_PATCH_REPAIR: ${{ inputs.ENABLE_PATCH_REPAIR }}
+      ENABLE_PATCH_CLEAN: ${{ inputs.ENABLE_PATCH_CLEAN }}
+      ENABLE_LIBBLKID_FIX: ${{ inputs.ENABLE_LIBBLKID_FIX }}
       JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
       DEBIAN_FRONTEND: noninteractive
 
@@ -284,7 +305,7 @@ jobs:
           echo "LDCheck path    : ${{ inputs.LDCHECKPATH }}"
           echo "Runner          : ${{ inputs.RUNNER_TYPE }}"
           echo "Self-host label : ${{ inputs.SELF_HOSTED_LABEL }}"
-          echo "Swap size       : ${{ inputs.SWAP_SIZE }} GB"
+          echo "Swap size       : ${{ inputs.RUNNER_TYPE != 'self-hosted' && 16 || inputs.SWAP_SIZE }} GB (GitHub-hosted forced to 16)"
           echo "Sync jobs       : ${{ inputs.REPO_SYNC_JOBS }}"
           echo "Extra cmd       : ${{ inputs.EXTRA_CMD }}"
           echo "Maintainer      : ${{ github.actor }}"
@@ -586,7 +607,7 @@ jobs:
       # repair them before burning build time.
       # ============================================================
       - name: Verify and repair OrangeFox patches
-        if: env.SYNC_BRANCH != '16.0'
+        if: env.ENABLE_PATCH_REPAIR == 'true' && env.SYNC_BRANCH != '16.0'
         shell: bash
         run: |
           set -euo pipefail
@@ -1157,6 +1178,7 @@ jobs:
       # CLEAN PATCH STATE
       # ============================================================
       - name: Clean OrangeFox patch state
+        if: env.ENABLE_PATCH_CLEAN == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1179,6 +1201,7 @@ jobs:
       # FIX LIBBLKID — PERMANENT PATCH
       # ============================================================
       - name: Fix libblkid source write bug
+        if: env.ENABLE_LIBBLKID_FIX == 'true'
         shell: bash
         run: |
           set -euo pipefail

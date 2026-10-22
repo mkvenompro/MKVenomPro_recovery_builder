@@ -98,7 +98,7 @@ on:
           - "4"
 
       SWAP_SIZE:
-        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 12 GB."
+        description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 16 GB."
         required: false
         type: choice
         default: "0"
@@ -237,7 +237,7 @@ jobs:
           echo "LDCheck path    : ${{ inputs.LDCHECKPATH }}"
           echo "Runner          : ${{ inputs.RUNNER_TYPE }}"
           echo "Self-host label : ${{ inputs.SELF_HOSTED_LABEL }}"
-          echo "Swap size       : ${{ inputs.SWAP_SIZE }} GB"
+          echo "Swap size       : ${{ inputs.RUNNER_TYPE != 'self-hosted' && 16 || inputs.SWAP_SIZE }} GB (GitHub-hosted forced to 16)"
           echo "Sync jobs       : ${{ inputs.REPO_SYNC_JOBS }}"
           echo "Extra cmd       : ${{ inputs.EXTRA_CMD }}"
           echo "Maintainer      : ${{ github.actor }}"
@@ -309,7 +309,7 @@ jobs:
         if: inputs.RUNNER_TYPE != 'self-hosted' || inputs.SWAP_SIZE != '0'
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 12 || inputs.SWAP_SIZE }}
+          swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 16 || inputs.SWAP_SIZE }}
 
       # ============================================================
       # BUILD ENVIRONMENT
