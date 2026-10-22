@@ -1340,6 +1340,30 @@ jobs:
 
           make clean
 
+          # ------------------------------------------------------------
+          # CTS platform-release fix.
+          # The twrp-14 / android-14 tree ships a CTS platform_releases.txt
+          # that only knows up to API 15. When the (A16) manifest raises
+          # PLATFORM_VERSION_LAST_STABLE to 16, cts.mk aborts the whole
+          # build with:
+          #   Could not find version "16" in CTS platform release file
+          # Recovery does not need CTS, but the target is evaluated at
+          # parse time, so we simply register the missing release(s).
+          # ------------------------------------------------------------
+          CTS_RELEASES_FILE="cts/tests/tests/os/assets/platform_releases.txt"
+          if [ -f "$CTS_RELEASES_FILE" ]; then
+            for v in 15 16 17; do
+              if ! grep -qxF "$v" "$CTS_RELEASES_FILE"; then
+                echo "$v" >> "$CTS_RELEASES_FILE"
+                echo "CTS: registered missing release ${v}"
+              fi
+            done
+            echo "CTS platform_releases.txt now contains:"
+            cat "$CTS_RELEASES_FILE" || true
+          else
+            echo "::warning::$CTS_RELEASES_FILE not found - skipping CTS release fix."
+          fi
+
           BUILD_JOBS=$(nproc)
           echo "Building with ${BUILD_JOBS} jobs..."
 
