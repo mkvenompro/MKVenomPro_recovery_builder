@@ -2,8 +2,13 @@ name: 🔁 Auto-retry failed builds
 
 # GitHub-hosted runners are occasionally preempted mid-build. When that
 # happens the runner dies with "The runner has received a shutdown signal"
-# and exit code 143, aborting an otherwise-healthy build. This watchdog
-# re-runs such builds automatically until they succeed (or hit the cap).
+# and exit code 143, aborting an otherwise-healthy build.
+#
+# This watchdog is SMART: before re-running, it inspects the failed job's
+# log and only retries *transient* failures (runner preemption, network).
+# Real, deterministic failures (sync errors, bad device tree, linker
+# errors, ninja FAILED:) are NOT retried — re-running them would be
+# pointless and would only burn minutes/rate-limit.
 #
 # Notes:
 #  - workflow_run only triggers for workflows that exist on the default
@@ -33,8 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     steps:
-      - name: Decide whether to retry
-        id: decide
+      - name: Analyse failure
+        id: analyse
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.event.workflow_run.id }}
@@ -42,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          MAX_ATTEMPTS=4   # initial attempt + 3 re-runs
+          MAX_ATTEMPTS=4   # initial attempt + up to 3 re-runs
           echo "Run $RUN_ID — attempt $ATTEMPT / $MAX_ATTEMPTS"
 
           if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
@@ -51,10 +56,88 @@ jobs:
             exit 0
           fi
 
+          # Download the full log of the failed run.
+          LOG="$(mktemp)"
+          if ! gh api "/repos/${{ github.repository }}/actions/runs/${RUN_ID}/logs" > /tmp/logs.zip 2>/dev/null; then
+            echo "::warning::Could not download logs; defaulting to NOT retry (be safe)."
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          unzip -o -q /tmp/logs.zip -d /tmp/logs || true
+
+          # Strip ANSI codes, runner timestamp prefixes, then drop lines that
+          # are just the workflow *script itself* being echoed by the shell
+          # (e.g. `echo "::error::..."`). Those are NOT real errors — they are
+          # the source of the error-handling code. Only the real compiler /
+          # build-tool output should remain.
+          cat /tmp/logs/*/*.txt 2>/dev/null \
+            | sed 's/\x1b\[[0-9;]*m//g' \
+            | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z[[:space:]]?//' \
+            | grep -Ev '^[[:space:]]*(echo|if|then|else|elif|fi|grep|cat|printf|set |LAST_ERRORS=|ERRORS=|RC=|STATUS=|MSGFILE=)[[:space:]]' \
+            | grep -Fv 'echo "' \
+            > "$LOG" || true
+          echo "Downloaded $(wc -l < "$LOG") filtered log lines."
+
+          # Signatures of a REAL, deterministic failure. If any is present,
+          # do NOT retry — re-running would just fail the same way again.
+          is_real_failure() {
+            grep -Eiq \
+              -e 'FAILED: [^ ]' \
+              -e 'ld\.lld: error:' \
+              -e 'clang\+\+: error: linker command failed' \
+              -e 'ninja: build stopped: subcommand failed' \
+              -e 'fatal error:' \
+              -e 'SOONG_MK .* not found' \
+              -e 'envsetup\.sh is missing after sync' \
+              -e 'has a syntax error \(manifest patch drift\)' \
+              -e 'git clone failed' \
+              -e 'Branch .* does not exist in' \
+              -e 'lunch failed with code' \
+              -e 'lunch command not available' \
+              -e 'Could not detect device codename' \
+              -e 'patch .* failed' \
+              -e 'Repo sync failed' \
+              -e 'No space left on device' \
+              -e 'ccache: error: Read-only file system' \
+              "$LOG"
+          }
+
+          # Signatures of a TRANSIENT (preemption / network) failure.
+          is_transient() {
+            grep -Eiq \
+              -e 'The runner has received a shutdown signal' \
+              -e 'exit code 143' \
+              -e 'runner service is stopped' \
+              -e 'was canceled' \
+              -e 'temporar' \
+              -e 'connection reset|Could not resolve host|SSL connection' \
+              "$LOG"
+          }
+
+          if is_real_failure; then
+            echo "::error::Real (deterministic) build failure detected — NOT retrying."
+            echo "--- matching lines ---"
+            grep -Eih \
+              -e 'FAILED: [^ ]' -e 'ld\.lld: error:' \
+              -e 'ninja: build stopped: subcommand failed' \
+              -e 'fatal error:' -e 'lunch failed with code' \
+              -e 'git clone failed' -e 'SOONG_MK .* not found' \
+              "$LOG" | tail -15 || true
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if is_transient; then
+            echo "Transient failure (runner preemption / network) — will retry."
+          else
+            echo "::warning::No real-failure signature found, but also no clear transient signature."
+            echo "::warning::Treating as transient (log may have been truncated with the runner)."
+          fi
+
           echo "retry=true" >> "$GITHUB_OUTPUT"
 
       - name: Re-run failed jobs
-        if: steps.decide.outputs.retry == 'true'
+        if: steps.analyse.outputs.retry == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_ID: ${{ github.event.workflow_run.id }}
