@@ -127,17 +127,25 @@ on:
         description: "Lunch build variant (used with the 3-segment combo <product>-<release>-<variant>)"
         required: true
         type: choice
-        default: "userdebug"
+        default: "eng"
         options:
+          - "eng"
           - "userdebug"
           - "user"
-          - "eng"
 
       LUNCH_RELEASE:
-        description: "Lunch release segment for Android 14+ (e.g. ap2a, ap1a, ap3a, trunk_staging). Empty = auto"
-        required: false
+        description: "Lunch release segment (Android release branch codename)"
+        required: true
+        type: choice
         default: "ap2a"
-        type: string
+        options:
+          - "ap2a"
+          - "ap1a"
+          - "bp1a"
+          - "bp2a"
+          - "cp1a"
+          - "cp2a"
+          - "trunk_staging"
 
 jobs:
   build:
@@ -1282,7 +1290,7 @@ jobs:
           LUNCH_TARGET=""
           LUNCH_SOURCE=""
 
-          LUNCH_VARIANT="${LUNCH_VARIANT:-userdebug}"
+          LUNCH_VARIANT="${LUNCH_VARIANT:-eng}"
           LUNCH_RELEASE="${LUNCH_RELEASE:-ap2a}"
 
           LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
