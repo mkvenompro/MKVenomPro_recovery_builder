@@ -1,0 +1,68 @@
+name: 🔁 Auto-retry failed builds
+
+# GitHub-hosted runners are occasionally preempted mid-build. When that
+# happens the runner dies with "The runner has received a shutdown signal"
+# and exit code 143, aborting an otherwise-healthy build. This watchdog
+# re-runs such builds automatically until they succeed (or hit the cap).
+#
+# Notes:
+#  - workflow_run only triggers for workflows that exist on the default
+#    branch, so this file must live on `main`.
+#  - run_attempt increments on every re-run, so we use it as the retry
+#    counter (no external state needed).
+
+on:
+  workflow_run:
+    workflows:
+      - "🦊 OrangeFox OFRP Builder"
+      - "🧡 TWRP Builder"
+      - "⬛ PitchBlack Builder"
+      - "🔷 SkyHawk Builder"
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: retry-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - name: Decide whether to retry
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          MAX_ATTEMPTS=4   # initial attempt + 3 re-runs
+          echo "Run $RUN_ID — attempt $ATTEMPT / $MAX_ATTEMPTS"
+
+          if [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
+            echo "::warning::Retry cap reached ($ATTEMPT/$MAX_ATTEMPTS). Not retrying."
+            echo "retry=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "retry=true" >> "$GITHUB_OUTPUT"
+
+      - name: Re-run failed jobs
+        if: steps.decide.outputs.retry == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          echo "Re-running failed jobs for run $RUN_ID ..."
+          gh api -X POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/actions/runs/${RUN_ID}/rerun-failed-jobs" \
+            && echo "Re-run requested." \
+            || echo "::warning::Could not request re-run (maybe already re-running)."
