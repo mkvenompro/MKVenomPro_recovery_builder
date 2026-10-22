@@ -571,6 +571,7 @@ jobs:
       # repair them before burning build time.
       # ============================================================
       - name: Verify and repair OrangeFox patches
+        if: env.SYNC_BRANCH != '16.0'
         shell: bash
         run: |
           set -euo pipefail
