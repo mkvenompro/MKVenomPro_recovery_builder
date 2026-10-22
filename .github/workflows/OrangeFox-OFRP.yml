@@ -123,6 +123,20 @@ on:
         required: false
         type: string
 
+      BUILD_JOBS:
+        description: "Parallel build jobs (mka -j). 0 = auto (nproc). Lower this if the runner is killed (OOM) during the build."
+        required: true
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "6"
+          - "8"
+
       LUNCH_VARIANT:
         description: "Lunch build variant (used with the 3-segment combo <product>-<release>-<variant>)"
         required: true
@@ -167,6 +181,7 @@ jobs:
       REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
       LUNCH_VARIANT: ${{ inputs.LUNCH_VARIANT }}
       LUNCH_RELEASE: ${{ inputs.LUNCH_RELEASE }}
+      BUILD_JOBS_INPUT: ${{ inputs.BUILD_JOBS }}
       JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
       DEBIAN_FRONTEND: noninteractive
 
@@ -337,7 +352,7 @@ jobs:
         if: inputs.RUNNER_TYPE != 'self-hosted' || inputs.SWAP_SIZE != '0'
         uses: pierotofy/set-swap-space@master
         with:
-          swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 12 || inputs.SWAP_SIZE }}
+          swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 16 || inputs.SWAP_SIZE }}
 
       # ============================================================
       # BUILD ENVIRONMENT
@@ -1349,7 +1364,11 @@ jobs:
 
           make clean
 
-          BUILD_JOBS=$(nproc)
+          if [ -n "${BUILD_JOBS_INPUT:-}" ] && [ "${BUILD_JOBS_INPUT}" != "0" ]; then
+            BUILD_JOBS="${BUILD_JOBS_INPUT}"
+          else
+            BUILD_JOBS=$(nproc)
+          fi
           echo "Building with ${BUILD_JOBS} jobs..."
 
           mka adbd "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
