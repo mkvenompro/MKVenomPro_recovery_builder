@@ -98,6 +98,19 @@ on:
           - "3"
           - "4"
 
+      BUILD_JOBS:
+        description: "Parallel build jobs (mka -j). 0 = auto (capped at 2 on GitHub-hosted runners to avoid OOM kill)."
+        required: true
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "6"
+
       SWAP_SIZE:
         description: "Swap size for self-hosted (GB, 0 = disable). GitHub-hosted is always fixed at 16 GB."
         required: false
@@ -308,6 +321,29 @@ jobs:
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: ${{ inputs.RUNNER_TYPE != 'self-hosted' && 16 || inputs.SWAP_SIZE }}
+
+      # The AOSP (soong) build peaks above physical RAM on GitHub-hosted
+      # runners (15.6 GB). Make the kernel actually USE the swap we just
+      # created instead of OOM-killing ninja/soong_build (exit 143).
+      - name: Tune swap usage (avoid OOM kill)
+        if: inputs.RUNNER_TYPE != 'self-hosted'
+        shell: bash
+        run: |
+          set -x
+          sudo sysctl -w vm.swappiness=100 || true
+          sudo sysctl -w vm.overcommit_memory=1 || true
+          sudo sysctl -w vm.vfs_cache_pressure=50 || true
+          sudo sysctl -w vm.min_free_kbytes=65536 || true
+          echo "--- swap before ---"
+          free -h || true
+          swapon --show || true
+          echo "--- forcing swap on ---"
+          sudo swapoff -a 2>/dev/null || true
+          sudo swapon -a 2>/dev/null || true
+          swapon --show || true
+          echo "--- swap after ---"
+          free -h || true
+          cat /proc/sys/vm/swappiness || true
 
       # ============================================================
       # BUILD ENVIRONMENT
@@ -1199,7 +1235,16 @@ jobs:
 
           make clean
 
-          BUILD_JOBS=$(nproc)
+          if [ -n "${BUILD_JOBS_INPUT:-}" ] && [ "${BUILD_JOBS_INPUT}" != "0" ]; then
+            BUILD_JOBS="${BUILD_JOBS_INPUT}"
+          else
+            # Auto: nproc, but GitHub-hosted runners only have 15.6 GB RAM and
+            # get OOM-killed (exit 143) with 4 jobs. Cap auto at 2 there.
+            BUILD_JOBS=$(nproc)
+            if [ "${{ inputs.RUNNER_TYPE }}" != "self-hosted" ] && [ "$BUILD_JOBS" -gt 2 ]; then
+              BUILD_JOBS=2
+            fi
+          fi
           echo "Building with ${BUILD_JOBS} jobs..."
 
           mka pbrp -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
