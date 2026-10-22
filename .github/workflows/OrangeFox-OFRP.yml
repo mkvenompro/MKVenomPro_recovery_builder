@@ -123,6 +123,22 @@ on:
         required: false
         type: string
 
+      LUNCH_VARIANT:
+        description: "Lunch build variant (used with the 3-segment combo <product>-<release>-<variant>)"
+        required: true
+        type: choice
+        default: "userdebug"
+        options:
+          - "userdebug"
+          - "user"
+          - "eng"
+
+      LUNCH_RELEASE:
+        description: "Lunch release segment for Android 14+ (e.g. ap2a, ap1a, ap3a, trunk_staging). Empty = auto"
+        required: false
+        default: "ap2a"
+        type: string
+
 jobs:
   build:
     name: "🦊 fox_${{ inputs.FOX_BRANCH }}"
@@ -141,6 +157,8 @@ jobs:
       OF_MAINTAINER: ${{ github.actor }}
       TARGET: ${{ inputs.BUILD_TARGET }}
       REPO_SYNC_JOBS: ${{ inputs.REPO_SYNC_JOBS }}
+      LUNCH_VARIANT: ${{ inputs.LUNCH_VARIANT }}
+      LUNCH_RELEASE: ${{ inputs.LUNCH_RELEASE }}
       JACK_SERVER_VM_ARGUMENTS: "-Dfile.encoding=UTF-8"
       DEBIAN_FRONTEND: noninteractive
 
@@ -1252,37 +1270,49 @@ jobs:
 
           # ------------------------------------------------------------
           # Choose the lunch combo, in order of preference:
-          #   1) COMMON_LUNCH_CHOICES from the device tree's AndroidProducts.mk
-          #   2) an explicit lunch_target.txt in the device tree
-          #   3) the legacy default twrp_<device>-eng
-          # This keeps us in sync with whatever the tree actually declares
-          # (e.g. twrp_zircon-eng vs twrp_zircon-ap2a-eng) without guessing.
+          #   1) explicit lunch_target.txt in the device tree
+          #   2) a 3-segment combo from AndroidProducts.mk
+          #      (Android 14+ requires <product>-<release>-<variant>,
+          #       e.g. twrp_zircon-ap2a-userdebug / -eng)
+          #   3) a 2-segment combo from AndroidProducts.mk (legacy)
+          #   4) the legacy default twrp_<device>-<variant>
+          # LUNCH_VARIANT / LUNCH_RELEASE let the user pick the variant
+          # and the release segment without editing the tree.
           # ------------------------------------------------------------
           LUNCH_TARGET=""
           LUNCH_SOURCE=""
 
+          LUNCH_VARIANT="${LUNCH_VARIANT:-userdebug}"
+          LUNCH_RELEASE="${LUNCH_RELEASE:-ap2a}"
+
+          LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
+          if [ -f "$LUNCH_OVERRIDE" ]; then
+            LUNCH_TARGET=$(tr -d '[:space:]' < "$LUNCH_OVERRIDE")
+            LUNCH_SOURCE="lunch_target.txt"
+          fi
+
           AP_FILE="$DEVICE_TREE_PATH/AndroidProducts.mk"
-          if [ -f "$AP_FILE" ]; then
-            # Grab the twrp_/fox_ <something> combo (first match). The Android
-            # build system always calls these "twrp_<device>-<variant>".
-            LUNCH_TARGET=$(grep -Eo 'twrp_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
-                             | grep -Ev '^$' | head -n1 || true)
+          if [ -z "$LUNCH_TARGET" ] && [ -f "$AP_FILE" ]; then
+            # Prefer the 3-segment combo, then fall back to the 2-segment one.
+            LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
+                             | grep -E -- "-${LUNCH_VARIANT}$" | head -n1 || true)
+            if [ -z "$LUNCH_TARGET" ]; then
+              LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
+                               | head -n1 || true)
+            fi
+            if [ -z "$LUNCH_TARGET" ]; then
+              LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
+                               | grep -E -- "-${LUNCH_VARIANT}$" | head -n1 || true)
+            fi
             if [ -n "$LUNCH_TARGET" ]; then
               LUNCH_SOURCE="AndroidProducts.mk (COMMON_LUNCH_CHOICES)"
             fi
           fi
 
           if [ -z "$LUNCH_TARGET" ]; then
-            LUNCH_OVERRIDE="$DEVICE_TREE_PATH/lunch_target.txt"
-            if [ -f "$LUNCH_OVERRIDE" ]; then
-              LUNCH_TARGET=$(tr -d '[:space:]' < "$LUNCH_OVERRIDE")
-              LUNCH_SOURCE="lunch_target.txt"
-            fi
-          fi
-
-          if [ -z "$LUNCH_TARGET" ]; then
-            LUNCH_TARGET="twrp_${DEVICE_NAME}-eng"
-            LUNCH_SOURCE="default (twrp_${DEVICE_NAME}-eng)"
+            # Build the 3-segment combo directly from the inputs.
+            LUNCH_TARGET="twrp_${DEVICE_NAME}-${LUNCH_RELEASE}-${LUNCH_VARIANT}"
+            LUNCH_SOURCE="constructed from LUNCH_RELEASE/LUNCH_VARIANT"
           fi
 
           echo "Lunch target: $LUNCH_TARGET  [source: $LUNCH_SOURCE]"
@@ -1295,13 +1325,13 @@ jobs:
             echo "----- diagnostic: declared combos -----"
             echo "DEVICE_TREE_PATH: $DEVICE_TREE_PATH"
             echo "--- AndroidProducts.mk (COMMON_LUNCH_CHOICES) ---"
-            if [ -f "$DEVICE_TREE_PATH/AndroidProducts.mk" ]; then
-              sed -n '1,80p' "$DEVICE_TREE_PATH/AndroidProducts.mk" || true
+            if [ -f "$AP_FILE" ]; then
+              sed -n '1,80p' "$AP_FILE" || true
             else
               echo "(AndroidProducts.mk not found)"
             fi
-            echo "--- all twrp_/fox_ combos found in tree ---"
-            grep -rhoE '(twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$DEVICE_TREE_PATH" 2>/dev/null | sort -u | head -20 || true
+            echo "--- all pb_/twrp_/fox_ combos found in tree ---"
+            grep -rhoE '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+(-[A-Za-z0-9_]+)?' "$DEVICE_TREE_PATH" 2>/dev/null | sort -u | head -30 || true
             echo "---------------------------------------"
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build OrangeFox" failure
