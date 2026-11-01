@@ -1105,43 +1105,38 @@ jobs:
       # ============================================================
       # FIX LIBBLKID — PERMANENT PATCH
       # ============================================================
-      - name: Fix libblkid source write bug
+      # ============================================================
+      # VALIDATE LIBBLKID SOURCES
+      # ============================================================
+      - name: Validate libblkid sources
         shell: bash
         run: |
           set -euo pipefail
-          "$STATE_DIR/stage_start.sh" "Fix libblkid"
+          "$STATE_DIR/stage_start.sh" "Validate libblkid"
 
           cd "$SYNC_PATH"
 
           LIBBLKID_BP="bootable/recovery/libblkid/Android.bp"
-          LIBBLKID_DIR="bootable/recovery/libblkid"
+          LIBBLKID_CONFIG="bootable/recovery/libblkid/include/config.h"
 
-          if [ -f "$LIBBLKID_BP" ]; then
-            cp "$LIBBLKID_BP" "$LIBBLKID_BP.bak" 2>/dev/null || true
-            sed -i 's/^genrule {/genrule_disabled {/g' "$LIBBLKID_BP" || true
-            sed -i 's/generated_sources:/\/\/ generated_sources:/g' "$LIBBLKID_BP" || true
-            sed -i 's/export_include_dirs:/\/\/ export_include_dirs:/g' "$LIBBLKID_BP" || true
-            echo "✅ libblkid Android.bp patched."
+          if [ ! -f "$LIBBLKID_BP" ]; then
+            echo "::error::Missing libblkid Android.bp: $LIBBLKID_BP"
+            "$STATE_DIR/stage_end.sh" "Validate libblkid" failure
+            exit 1
           fi
 
-          mkdir -p "$LIBBLKID_DIR/src"
-          if [ ! -f "$LIBBLKID_DIR/src/config.h" ]; then
-            printf '%s\n' \
-              '#define HAVE_ERR_H 1' \
-              '#define HAVE_MEMPCPY 1' \
-              '#define HAVE_FSYNC 1' \
-              '#define HAVE_LOFF_T 1' \
-              > "$LIBBLKID_DIR/src/config.h"
-            echo "✅ libblkid config.h generated."
+          if [ ! -f "$LIBBLKID_CONFIG" ]; then
+            echo "::error::Missing libblkid config header: $LIBBLKID_CONFIG"
+            "$STATE_DIR/stage_end.sh" "Validate libblkid" failure
+            exit 1
           fi
 
-          chmod -R u+w "$LIBBLKID_DIR" 2>/dev/null || true
+          # Keep upstream Android.bp and include/config.h intact.
+          # Do not comment out export_include_dirs.
+          echo "libblkid Android.bp and include/config.h are present."
+          echo "Android.bp will not be modified."
 
-          "$STATE_DIR/stage_end.sh" "Fix libblkid" success
-
-      # ============================================================
-      # BUILD YARP — GENERIC
-      # ============================================================
+          "$STATE_DIR/stage_end.sh" "Validate libblkid" success
       - name: Build YARP
         shell: bash
         run: |
