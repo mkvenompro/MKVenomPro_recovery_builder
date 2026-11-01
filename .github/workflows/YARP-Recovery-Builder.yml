@@ -1198,8 +1198,14 @@ jobs:
 
           AP_FILE="$DEVICE_TREE_PATH/AndroidProducts.mk"
           if [ -f "$AP_FILE" ]; then
-            LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
+            # Prefer the complete Android 16 combo: product-bp2a-variant.
+            LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-bp2a-[A-Za-z0-9_]+' "$AP_FILE" \
                              | head -n1 || true)
+            # Fallback for older product-variant declarations.
+            if [ -z "$LUNCH_TARGET" ]; then
+              LUNCH_TARGET=$(grep -Eo '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$AP_FILE" \
+                               | head -n1 || true)
+            fi
             if [ -n "$LUNCH_TARGET" ]; then
               LUNCH_SOURCE="AndroidProducts.mk (COMMON_LUNCH_CHOICES)"
             fi
@@ -1229,6 +1235,7 @@ jobs:
           fi
 
           echo "Lunch target: $LUNCH_TARGET  [source: $LUNCH_SOURCE]"
+          echo "Selected Lunch Target: $LUNCH_TARGET"
 
           lunch "$LUNCH_TARGET"
           LUNCH_STATUS=$?
@@ -1245,7 +1252,7 @@ jobs:
               echo "(AndroidProducts.mk not found)"
             fi
             echo "--- all pb_/twrp_/fox_ combos found in tree ---"
-            grep -rhoE '(pb|twrp|fox)_[A-Za-z0-9_]+-[A-Za-z0-9_]+' "$DEVICE_TREE_PATH" 2>/dev/null | sort -u | head -20 || true
+            grep -rhoE '(pb|twrp|fox)_[A-Za-z0-9_]+(-[A-Za-z0-9_]+){1,2}' "$DEVICE_TREE_PATH" 2>/dev/null | sort -u | head -20 || true
             echo "---------------------------------------"
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build YARP" failure
