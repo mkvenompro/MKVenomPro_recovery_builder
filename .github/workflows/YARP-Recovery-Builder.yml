@@ -1294,6 +1294,43 @@ jobs:
           fi
 
           if [ "$MKA_STATUS" -ne 0 ]; then
+            echo "========== SOONG JSON DIAGNOSTICS =========="
+            python3 - "$SYNC_PATH/out/soong/soong.${TARGET_PRODUCT}.variables" <<'SOONG_DIAG_PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          p = Path(sys.argv[1])
+
+          if not p.is_file():
+              print("Variables file not found:", p)
+              print("Available files:", [x.name for x in p.parent.glob("soong.*.variables")][:10])
+          else:
+              raw = p.read_text(errors="replace")
+              print("File:", p)
+              print("Size:", len(raw), "bytes")
+
+              try:
+                  json.loads(raw)
+                  print("JSON is valid; investigate another Soong input.")
+              except json.JSONDecodeError as e:
+                  print("JSON ERROR:", e.msg)
+                  print("Line:", e.lineno, "Column:", e.colno, "Offset:", e.pos)
+
+                  start = max(0, e.pos - 120)
+                  end = min(len(raw), e.pos + 120)
+                  print("Error context:", repr(raw[start:end]))
+
+                  print("Nearby backslashes:")
+                  for i in range(start, end):
+                      if raw[i] == "\\":
+                          print("Offset", i, repr(raw[max(0, i-35):min(len(raw), i+45)]))
+
+                  lines = raw.splitlines()
+                  for n in range(max(0, e.lineno-3), min(len(lines), e.lineno+2)):
+                      print(f"Line {n+1}: {lines[n][:300]!r}")
+          SOONG_DIAG_PY
+            echo "========== END SOONG DIAGNOSTICS =========="
             echo "::error::mka failed with code $MKA_STATUS"
             echo "BUILD" > "$STATE_DIR/failure_reason"
             "$STATE_DIR/stage_end.sh" "Build YARP" failure
