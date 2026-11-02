@@ -1278,6 +1278,39 @@ jobs:
           fi
           echo "Building with ${BUILD_JOBS} jobs..."
 
+          echo "========== QUICK SOONG PREFLIGHT =========="
+          set +e
+          m nothing
+          BUILD_STATUS=$?
+          set -e
+          echo "========== EXTRA VARIABLES CHECK =========="
+          python3 - <<'PYJSON'
+          import json
+          from pathlib import Path
+          p = Path("out/soong/soong.twrp_spinel.extra.variables")
+          if not p.exists():
+              print("ERROR: extra.variables was not generated")
+              raise SystemExit(1)
+          s = p.read_text(errors="replace")
+          try:
+              json.loads(s)
+              print("EXTRA JSON: VALID")
+          except json.JSONDecodeError as e:
+              print(f"EXTRA JSON ERROR: {e}")
+              a = max(1, e.lineno - 3)
+              b = min(len(s.splitlines()), e.lineno + 3)
+              for n, line in enumerate(s.splitlines(), 1):
+                  if a <= n <= b:
+                      print(f"{n}: {line!r}")
+              raise SystemExit(1)
+          PYJSON
+          JSON_STATUS=$?
+          if [ "$BUILD_STATUS" -ne 0 ] || [ "$JSON_STATUS" -ne 0 ]; then
+              echo "Preflight failed. Full build skipped."
+              exit 1
+          fi
+          echo "Preflight passed. Starting full build..."
+
           mka "$TARGET" -j"$BUILD_JOBS" 2>&1 | tee -a "$STATE_DIR/build.log"
           MKA_STATUS=${PIPESTATUS[0]}
 
