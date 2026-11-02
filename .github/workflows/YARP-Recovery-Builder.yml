@@ -1254,6 +1254,16 @@ jobs:
             exit 1
           fi
 
+          echo "========== PRODUCT PATH DIAGNOSTICS =========="
+          for VAR in INTERNAL_PRODUCT PRODUCT_DIR TARGET_DEVICE_DIR PRODUCT_DEVICE TARGET_PRODUCT; do
+            VALUE="$(get_build_var "$VAR" 2>&1)"
+            echo "$VAR raw: $VALUE"
+            printf '%s escaped: ' "$VAR"
+            printf '%q\n' "$VALUE"
+          done
+          echo "DEVICE_TREE_PATH: $DEVICE_TREE_PATH"
+          echo "========== END PRODUCT PATH DIAGNOSTICS =========="
+
           make clean
 
           if [ -n "${BUILD_JOBS_INPUT:-}" ] && [ "${BUILD_JOBS_INPUT}" != "0" ]; then
