@@ -1272,6 +1272,98 @@ jobs:
           MKA_STATUS=${PIPESTATUS[0]}
 
           if [ "$MKA_STATUS" -ne 0 ]; then
+            echo "========== SOONG JSON DIAGNOSTICS =========="
+            SOONG_VARS="$SYNC_PATH/out/soong/soong.${TARGET_PRODUCT}.variables"
+
+            if [ -f "$SOONG_VARS" ]; then
+              echo "Inspecting: $SOONG_VARS"
+              python3 - "$SOONG_VARS" <<'PYJSON'
+import json
+import pathlib
+import sys
+
+p = pathlib.Path(sys.argv[1])
+data = p.read_text(errors="replace")
+
+try:
+    json.loads(data)
+    print("JSON parser: valid")
+except json.JSONDecodeError as e:
+    print("JSON ERROR:", e)
+    print("Line:", e.lineno, "Column:", e.colno, "Position:", e.pos)
+    start = max(0, e.pos - 160)
+    end = min(len(data), e.pos + 160)
+    print("Context repr:", repr(data[start:end]))
+    print("Character repr:", repr(data[e.pos:e.pos+1]))
+
+    print("Invalid backslash escape candidates:")
+    for i, ch in enumerate(data):
+        if ch == "\\" and i + 1 < len(data):
+            nxt = data[i + 1]
+            if nxt not in '"\\/bfnrtu':
+                print(f"Position {i}: {data[i:i+12]!r}")
+else:
+    print("No JSON parsing error detected.")
+PYJSON
+            else
+              echo "::warning::Soong variables file was not found."
+              find "$SYNC_PATH/out/soong" -maxdepth 1 -type f -name '*.variables' -print 2>/dev/null || true
+            fi
+
+            echo "========== DEVICE TREE SOONG CONFIG =========="
+            grep -RInE 'PRODUCT_SOONG_CONFIG|SOONG_CONFIG_' \
+              "$DEVICE_TREE_PATH" \
+              --include='*.mk' --include='*.bp' --include='*.json' \
+              2>/dev/null | head -100 || true
+
+            echo "========== END SOONG DIAGNOSTICS =========="
+
+            echo "========== SOONG JSON DIAGNOSTICS =========="
+            SOONG_VARS="$SYNC_PATH/out/soong/soong.${TARGET_PRODUCT}.variables"
+
+            if [ -f "$SOONG_VARS" ]; then
+              echo "Inspecting: $SOONG_VARS"
+              python3 - "$SOONG_VARS" <<'PYJSON'
+import json
+import pathlib
+import sys
+
+p = pathlib.Path(sys.argv[1])
+data = p.read_text(errors="replace")
+
+try:
+    json.loads(data)
+    print("JSON parser: valid")
+except json.JSONDecodeError as e:
+    print("JSON ERROR:", e)
+    print("Line:", e.lineno, "Column:", e.colno, "Position:", e.pos)
+    start = max(0, e.pos - 160)
+    end = min(len(data), e.pos + 160)
+    print("Context repr:", repr(data[start:end]))
+    print("Character repr:", repr(data[e.pos:e.pos+1]))
+
+    print("Invalid backslash escape candidates:")
+    for i, ch in enumerate(data):
+        if ch == "\\" and i + 1 < len(data):
+            nxt = data[i + 1]
+            if nxt not in '"\\/bfnrtu':
+                print(f"Position {i}: {data[i:i+12]!r}")
+else:
+    print("No JSON parsing error detected.")
+PYJSON
+            else
+              echo "::warning::Soong variables file was not found."
+              find "$SYNC_PATH/out/soong" -maxdepth 1 -type f -name '*.variables' -print 2>/dev/null || true
+            fi
+
+            echo "========== DEVICE TREE SOONG CONFIG =========="
+            grep -RInE 'PRODUCT_SOONG_CONFIG|SOONG_CONFIG_' \
+              "$DEVICE_TREE_PATH" \
+              --include='*.mk' --include='*.bp' --include='*.json' \
+              2>/dev/null | head -100 || true
+
+            echo "========== END SOONG DIAGNOSTICS =========="
+
             if grep -q "ccache: error: Read-only file system" "$STATE_DIR/build.log" 2>/dev/null; then
               echo
               echo "========================================"
