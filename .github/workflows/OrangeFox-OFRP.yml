@@ -1259,6 +1259,56 @@ jobs:
           "$STATE_DIR/stage_end.sh" "Fix libblkid" success
 
       # ============================================================
+      # APPLY DEVICE TREE SOURCE PATCHES
+      # ============================================================
+      - name: Apply device tree source patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$STATE_DIR/stage_start.sh" "Apply device tree patches"
+
+          PATCH_ROOT="$DEVICE_TREE_PATH/patches"
+          if [ ! -d "$PATCH_ROOT" ]; then
+            echo "No patches/ directory in the device tree - nothing to apply."
+            "$STATE_DIR/stage_end.sh" "Apply device tree patches" success
+            exit 0
+          fi
+
+          cd "$SYNC_PATH"
+
+          # Runs after orangefox_sync.sh (and after the optional clean step), so
+          # the device patches always sit on top of the final upstream state.
+          # Patch paths are relative to the sync root, e.g. system/vold/... .
+          mapfile -t PATCHES < <(find "$PATCH_ROOT" -type f -name '*.patch' | sort)
+          if [ "${#PATCHES[@]}" -eq 0 ]; then
+            echo "patches/ exists but contains no *.patch files."
+            "$STATE_DIR/stage_end.sh" "Apply device tree patches" success
+            exit 0
+          fi
+
+          for p in "${PATCHES[@]}"; do
+            rel="${p#"$PATCH_ROOT"/}"
+            echo "---- $rel"
+            if patch -p1 --forward --batch --dry-run < "$p" >/dev/null 2>&1; then
+              patch -p1 --forward --batch < "$p"
+              echo "   applied"
+            elif patch -p1 --forward --batch --dry-run -R < "$p" >/dev/null 2>&1; then
+              echo "   already applied - skipping"
+            else
+              echo "::error::Cannot apply device tree patch: $rel"
+              patch -p1 --forward --batch --dry-run < "$p" || true
+              exit 1
+            fi
+          done
+
+          if [ -d system/vold/.git ]; then
+            echo "---- system/vold changes:"
+            git -C system/vold status --porcelain
+          fi
+
+          "$STATE_DIR/stage_end.sh" "Apply device tree patches" success
+
+      # ============================================================
       # BUILD ORANGEFOX — GENERIC
       # ============================================================
       - name: Build OrangeFox
